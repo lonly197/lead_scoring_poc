@@ -1,0 +1,55 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# Environment
+.env
+
+# Data
+data/*.csv
+data/*.parquet
+!data/.gitkeep
+
+# Outputs (models, logs, reports, etc.)
+outputs/
+!outputs/.gitkeep
+
+# OS
+.DS_Store
+Thumbs.db
+
+# AutoGluon
+AutogluonModels/
+ag_*/
