@@ -178,30 +178,16 @@ def main():
         df = df.drop(columns=cols_to_drop)
         logger.info(f"排除 {len(cols_to_drop)} 列: {cols_to_drop[:5]}{'...' if len(cols_to_drop) > 5 else ''}")
 
-    # 加载特征工程元数据
-    feature_metadata = load_feature_metadata(model_path)
-    has_category_mappings = bool(feature_metadata.get("category_mappings"))
-
     # 特征工程（与训练时相同的处理）
     logger.info("执行特征工程...")
     feature_engineer = FeatureEngineer(
         time_columns=config.feature.time_columns,
-        categorical_columns=config.feature.categorical_features,
         numeric_columns=config.feature.numeric_features,
     )
 
-    if has_category_mappings:
-        # 使用训练时保存的编码映射
-        logger.info("使用训练时的类别编码映射")
-        df_processed, _ = feature_engineer.process(
-            df,
-            fit=False,
-            category_mappings=feature_metadata["category_mappings"],
-        )
-    else:
-        # 兼容旧模型：重新拟合（验证数据与训练数据相同时可用）
-        logger.warning("未找到特征元数据，使用 fit=True 模式")
-        df_processed, _ = feature_engineer.process(df, fit=True)
+    # 注意：AutoGluon 自动处理类别编码和缺失值
+    # FeatureEngineer 只处理时间特征提取和数值类型转换
+    df_processed, _ = feature_engineer.process(df)
 
     # 保存目标值用于评估
     y_true = df_processed[target].values
