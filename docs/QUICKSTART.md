@@ -137,7 +137,54 @@ uv run python scripts/generate_topk.py \
 
 ---
 
+## 模型推理
+
+### 使用已训练模型预测
+
+```python
+from autogluon.tabular import TabularPredictor
+
+# 加载模型
+predictor = TabularPredictor.load("outputs/models/arrive_model")
+
+# 预测新数据
+import pandas as pd
+new_data = pd.read_csv("new_leads.csv")
+
+# 预测类别
+predictions = predictor.predict(new_data)
+
+# 预测概率
+probabilities = predictor.predict_proba(new_data)
+```
+
+### 命令行快速查看
+
+```bash
+# 查看模型信息
+uv run python -c "
+from autogluon.tabular import TabularPredictor
+p = TabularPredictor.load('outputs/models/arrive_model')
+print('最佳模型:', p.model_best)
+print('评估指标:', p.eval_metric)
+"
+```
+
+### 验证脚本
+
+```bash
+# 使用验证脚本
+uv run python scripts/validate_model.py
+
+# 使用新数据验证
+uv run python scripts/validate_model.py --data-path /path/to/new_data.csv
+```
+
+---
+
 ## 更多文档
 
 - [FAQ 常见问题](FAQ.md)
-- [模型验证指南](model_validation.md)
+- [训练脚本说明](TRAINING.md)
+- [配置说明](CONFIGURATION.md)
+- [架构说明](ARCHITECTURE.md)
