@@ -65,6 +65,23 @@ def parse_args():
         default="outputs/validation",
         help="输出目录",
     )
+    parser.add_argument(
+        "--oot-test",
+        action="store_true",
+        help="仅评估 OOT 测试集（时间 >= valid_end），避免数据泄露",
+    )
+    parser.add_argument(
+        "--train-end",
+        type=str,
+        default="2026-03-11",
+        help="训练集截止日期（仅 --oot-test 模式使用）",
+    )
+    parser.add_argument(
+        "--valid-end",
+        type=str,
+        default="2026-03-16",
+        help="验证集截止日期（仅 --oot-test 模式使用，测试集为时间 >= valid_end）",
+    )
 
     return parser.parse_args()
 
@@ -196,6 +213,25 @@ def main():
     if target in df.columns:
         df = df[df[target] != "Unknown"].copy()
         logger.info(f"过滤 Unknown 后: {len(df)} 行")
+
+    # OOT 测试集切分（避免数据泄露）
+    if args.oot_test:
+        time_column = "线索创建时间"
+        if time_column not in df.columns:
+            logger.error(f"OOT 模式需要 '{time_column}' 列，但数据中不存在")
+            sys.exit(1)
+
+        df[time_column] = pd.to_datetime(df[time_column], errors="coerce")
+        valid_end = pd.Timestamp(args.valid_end)
+
+        # 测试集：时间 >= valid_end
+        df = df[df[time_column] >= valid_end].copy()
+        logger.info(f"OOT 测试集切分: 时间 >= {args.valid_end}")
+        logger.info(f"测试集样本量: {len(df)} 行")
+
+        if len(df) == 0:
+            logger.error("OOT 测试集为空，请检查 valid_end 参数或数据时间范围")
+            sys.exit(1)
 
     # 排除不需要的列（但保留目标列用于评估）
     excluded_columns = get_excluded_columns(target)

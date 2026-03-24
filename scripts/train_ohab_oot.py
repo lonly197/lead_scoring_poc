@@ -95,6 +95,12 @@ def parse_args():
         default=None,
         help="日志文件路径（由 run.py 传入）",
     )
+    parser.add_argument(
+        "--num-bag-folds",
+        type=int,
+        default=5,
+        help="交叉验证折数（0 表示禁用，默认 5）",
+    )
 
     return parser.parse_args()
 
@@ -211,13 +217,20 @@ def main():
         logger.info("训练策略: 使用验证集作为 tuning_data（模型选择）")
         logger.info(f"训练集: {len(train_df):,} 行, 验证集(tuning): {len(valid_df):,} 行")
 
-        predictor.train(
-            train_data=train_df,
-            tuning_data=valid_df,  # 验证集用于模型选择，不参与训练
-            presets=args.preset,
-            time_limit=args.time_limit,
-            excluded_columns=excluded_columns,
-        )
+        train_kwargs = {
+            "train_data": train_df,
+            "tuning_data": valid_df,  # 验证集用于模型选择，不参与训练
+            "presets": args.preset,
+            "time_limit": args.time_limit,
+            "excluded_columns": excluded_columns,
+        }
+
+        # 添加交叉验证（增强模型稳定性）
+        if args.num_bag_folds > 0:
+            train_kwargs["num_bag_folds"] = args.num_bag_folds
+            logger.info(f"启用 {args.num_bag_folds} 折交叉验证（Bagging）")
+
+        predictor.train(**train_kwargs)
 
         # 5. 评估
         logger.info("步骤 5/6: 模型评估")

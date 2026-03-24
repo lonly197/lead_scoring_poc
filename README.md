@@ -23,6 +23,12 @@ uv run python scripts/train_arrive.py
 
 # 后台运行长时间训练
 uv run python scripts/run.py train_arrive --daemon
+
+# 验证模型（OOT 测试集，避免数据泄露）
+uv run python scripts/validate_model.py \
+    --data-path ./data/202603.tsv \
+    --oot-test \
+    --valid-end "2026-03-16"
 ```
 
 ## 文档
