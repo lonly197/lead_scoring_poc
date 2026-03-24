@@ -199,7 +199,6 @@ def main():
             output_path=str(output_dir),
             eval_metric="log_loss",
             problem_type="multiclass",
-            preset=args.preset,
             sample_weight="balance_weight",
             weight_evaluation=True,
         )
@@ -207,10 +206,11 @@ def main():
 
         train_valid_df = pd.concat([train_df, valid_df], ignore_index=True)
 
-        predictor.fit(
+        predictor.train(
             train_data=train_valid_df,
-            excluded_columns=excluded_columns,
+            presets=args.preset,
             time_limit=args.time_limit,
+            excluded_columns=excluded_columns,
         )
 
         # 5. 评估
@@ -255,7 +255,7 @@ def main():
             },
             "model_info": {
                 "preset": args.preset,
-                "best_model": predictor.get_model_name(),
+                "best_model": predictor._predictor.model_best if predictor._predictor else None,
             },
             "valid_report": valid_report,
             "test_report": test_report,
