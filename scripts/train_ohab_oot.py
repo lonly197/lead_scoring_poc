@@ -200,7 +200,8 @@ def main():
             eval_metric="log_loss",
             problem_type="multiclass",
             sample_weight="balance_weight",
-            weight_evaluation=True,
+            # 注意：weight_evaluation=True 与 sample_weight="balance_weight" 不兼容
+            # 详见 https://github.com/autogluon/autogluon/issues/XXXX
         )
         logger.info("启用类别权重自动平衡 (sample_weight='balance_weight')")
 

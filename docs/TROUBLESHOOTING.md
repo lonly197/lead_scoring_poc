@@ -212,6 +212,54 @@ predictor.train(
 
 ---
 
+### weight_evaluation 与 balance_weight 冲突
+
+**问题现象**：
+
+```
+ValueError: Sample weights cannot be None when weight_evaluation=True.
+```
+
+训练完成后在 `calibrate_model()` 阶段报错。
+
+**问题原因**：
+
+`sample_weight="balance_weight"` + `weight_evaluation=True` 参数组合不兼容：
+
+1. `sample_weight="balance_weight"` 启用自动类别权重平衡
+2. `weight_evaluation=True` 要求评估时显式传入样本权重
+3. AutoGluon 在 `calibrate_model()` 内部调用 `score_with_y_pred_proba(weights=None)`
+4. 冲突：`weight_evaluation=True` 禁止 weights=None
+
+**AutoGluon 官方警告**：
+
+```
+We do not recommend specifying weight_evaluation when sample_weight='balance_weight'
+```
+
+**修复方案**：
+
+移除 `weight_evaluation=True` 参数：
+
+```python
+# 修复前（错误）
+predictor = LeadScoringPredictor(
+    label=target_label,
+    sample_weight="balance_weight",
+    weight_evaluation=True,  # ← 导致冲突
+)
+
+# 修复后（正确）
+predictor = LeadScoringPredictor(
+    label=target_label,
+    sample_weight="balance_weight",  # AutoGluon 自动处理训练和评估权重
+)
+```
+
+**修复提交**：`待提交` - fix: remove conflicting weight_evaluation parameter
+
+---
+
 ## 数据质量问题
 
 ### O 级样本不足
