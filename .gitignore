@@ -50,6 +50,12 @@ outputs/
 .DS_Store
 Thumbs.db
 
+# Process reports (dated reports, not code docs)
+docs/*报告_*.md
+docs/*报告_*.pdf
+*_报告_????????.md
+*_报告_????????.pdf
+
 # AutoGluon
 AutogluonModels/
 ag_*/
