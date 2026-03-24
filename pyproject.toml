@@ -9,7 +9,7 @@ authors = [
     { name = "Lead Scoring Team" }
 ]
 dependencies = [
-    "autogluon-tabular[lightgbm,catboost,xgboost]>=1.2.0",
+    "autogluon-tabular[lightgbm,catboost,xgboost,fastai]>=1.2.0",
     "pandas>=2.0.0",
     "numpy>=1.24.0",
     "python-dotenv>=1.0.0",
