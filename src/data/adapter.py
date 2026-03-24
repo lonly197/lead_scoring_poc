@@ -32,57 +32,58 @@ class DataFormatConfig:
     column_names: List[str] = field(default_factory=list)
 
 
-# 新数据格式配置（202603.csv）
+# 新数据格式配置（202603.csv - 46列）
+# 根据实际数据推断的列映射
 NEW_DATA_FORMAT = DataFormatConfig(
     sep="\t",
     header=None,  # 无表头
     column_names=[
-        "线索唯一ID",
-        "客户ID_店端_备用",  # 列2（大部分为空）
-        "客户ID",
-        "手机号_脱敏",
-        "线索创建时间",
-        "一级渠道名称",
-        "二级渠道名称",
-        "三级渠道名称",
-        "四级渠道名称",
-        "线索类型",
-        "客户性别_备用",  # 列11（大部分为空）
-        "所在城市",
-        "首触意向车型",
-        "预算区间_备用",  # 列14（大部分为空）
-        "分配时间",
-        "线索下发时间",
-        "跟进时间_备用",  # 列17-20（大部分为空）
-        "跟进内容_备用",
-        "跟进结果_备用",
-        "跟进备注_备用",
-        "首触时间",
-        "通话次数",
-        "通话总时长",
-        "通话内容_备用",  # 列24-25（大部分为空）
-        "通话备注_备用",
-        "首触跟进记录",
-        "首触线索评级",
-        "非首触跟进时间",
-        "非首触跟进记录",
-        "线索评级变化时间",
-        "线索评级结果",
-        "客户是否主动询问交车时间",
-        "客户是否主动询问购车权益",
-        "客户是否主动询问金融政策",
-        "客户是否同意加微信",
-        "客户是否表示门店距离太远拒绝到店",
-        "到店时间",
-        "到店经销商ID",
-        "试驾时间",
-        "下订时间",
-        "战败原因",
-        "SOP开口标签",
-        "意向金支付状态",
-        "历史订单次数",
-        "历史到店次数",
-        "历史试驾次数",
+        "线索唯一ID",           # 列0: DIS260301001002008
+        "客户ID_店端_备用",     # 列1: 另一个ID
+        "客户ID",               # 列2: 2027778329376829441
+        "手机号_脱敏",          # 列3: 18562660372
+        "线索创建时间",         # 列4: 2026-03-01 00:10:03
+        "一级渠道名称",         # 列5: 垂媒集采
+        "二级渠道名称",         # 列6: 汽车之家-车商汇
+        "三级渠道名称",         # 列7: 留资
+        "四级渠道名称",         # 列8: 12月项目/直播等
+        "线索类型_备用",        # 列9: 空
+        "数值字段_备用",        # 列10: 数值
+        "所在城市",             # 列11: 青岛市
+        "首触意向车型",         # 列12: 铂智3X
+        "预算区间_备用",        # 列13: 空
+        "分配时间",             # 列14: 时间
+        "线索下发时间",         # 列15: 时间
+        "跟进时间_备用",        # 列16: 空
+        "跟进内容_备用",        # 列17: 空
+        "跟进结果_备用",        # 列18: 空
+        "跟进备注_备用",        # 列19: 空
+        "首触时间",             # 列20: 时间
+        "通话次数",             # 列21: 数值
+        "通话总时长",           # 列22: 数值
+        "首触跟进记录_备用",    # 列23: 空
+        "非首触跟进时间_备用",  # 列24: 空
+        "跟进记录_JSON",        # 列25: JSON
+        "线索评级结果",         # 列26: H/A/B/O ✓ OHAB评级
+        "线索评级变化时间_备用", # 列27: 时间
+        "跟进详情_JSON",        # 列28: JSON
+        "非首触跟进时间_备用2", # 列29: 时间
+        "线索评级_试驾后",      # 列30: H/A/B/O 另一个OHAB评级
+        "客户是否主动询问交车时间",   # 列31: 是/否
+        "客户是否主动询问购车权益",   # 列32: 是/否
+        "客户是否主动询问金融政策",   # 列33: 是/否
+        "客户是否同意加微信",         # 列34: 是/否
+        "客户是否表示门店距离太远拒绝到店",  # 列35: 是/否
+        "到店时间",             # 列36: 时间
+        "到店经销商ID_备用",    # 列37: 文本
+        "到店日期_备用",        # 列38: 文本
+        "试驾时间",             # 列39: 时间
+        "战败原因",             # 列40: 文本
+        "SOP开口标签_备用",     # 列41: 空
+        "意向金支付状态_备用",  # 列42: 空
+        "备用字段_43",          # 列43: 空
+        "历史订单次数_备用",    # 列44: 数值
+        "历史到店次数_备用",    # 列45: 数值
     ]
 )
 
@@ -226,8 +227,28 @@ def load_and_adapt_data(
         "names": format_config.column_names if format_config.header is None else None,
     }
 
-    # 新格式（无表头）需要特殊处理不规则行
+    # 新格式（无表头）需要特殊处理
     if format_config.header is None:
+        # 先读取第一行检测实际列数
+        # 注意：不能用strip()，否则会删除末尾的空制表符导致列数计算错误
+        with open(file_path, 'r', encoding='utf-8') as f:
+            first_line = f.readline()
+        actual_columns = len(first_line.split(format_config.sep))
+
+        defined_columns = len(format_config.column_names)
+
+        if actual_columns != defined_columns:
+            # 列数不匹配时，扩展或截断列名
+            if actual_columns > defined_columns:
+                # 扩展列名：为额外列添加占位名称
+                extra_names = [f"_未命名列_{i}" for i in range(actual_columns - defined_columns)]
+                read_params["names"] = format_config.column_names + extra_names
+                print(f"警告: 数据列数({actual_columns})多于定义列数({defined_columns})，已添加占位列名")
+            else:
+                # 截断列名
+                read_params["names"] = format_config.column_names[:actual_columns]
+                print(f"警告: 数据列数({actual_columns})少于定义列数({defined_columns})，已截断列名")
+
         read_params["engine"] = "python"
         read_params["on_bad_lines"] = "skip"
     else:
@@ -235,6 +256,15 @@ def load_and_adapt_data(
 
     # 加载数据
     df = pd.read_csv(file_path, **read_params)
+
+    # 验证关键列是否存在
+    required_columns = ["线索创建时间", "线索唯一ID"]
+    missing_columns = [col for col in required_columns if col not in df.columns]
+    if missing_columns:
+        raise ValueError(
+            f"数据格式错误：缺少必需列 {missing_columns}。"
+            f"当前列名: {list(df.columns[:10])}...（共{len(df.columns)}列）"
+        )
 
     # 计算目标标签
     df = calculate_target_labels(df)

@@ -231,8 +231,8 @@ class FeatureEngineer:
                     f"{col}_is_weekend",
                 ])
 
-                # 删除原始时间列
-                df = df.drop(columns=[col])
+                # 保留原始时间列（OOT 切分等场景需要）
+                # 不再删除: df = df.drop(columns=[col])
 
                 logger.debug(f"从 {col} 提取时间特征: {new_features[-3:]}")
 
