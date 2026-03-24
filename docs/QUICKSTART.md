@@ -18,6 +18,23 @@ cp .env.example .env
 
 ---
 
+## 数据诊断
+
+在训练前，可使用诊断脚本检查数据格式：
+
+```bash
+# 检查数据格式和关键列
+uv run python scripts/diagnose_data.py ./data/202603.tsv
+```
+
+**诊断功能**：
+- 检测分隔符和列数
+- 验证关键列是否存在（线索创建时间、线索唯一ID 等）
+- 显示 OHAB 评级分布
+- 列出所有列名和样本值（方便调试映射问题）
+
+---
+
 ## 运行训练
 
 ### 原数据格式训练（train_arrive, train_ohab）
