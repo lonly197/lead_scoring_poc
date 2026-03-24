@@ -6,7 +6,6 @@
 """
 
 import argparse
-import os
 import subprocess
 import sys
 from datetime import datetime
@@ -16,7 +15,13 @@ from pathlib import Path
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
-from src.utils.helpers import get_timestamp, load_json, save_process_info
+from src.utils.helpers import get_timestamp
+
+
+TASK_SCRIPT_ALIASES = {
+    "train_arrive_oot": "train_arrive",
+    "train_ohab_oot": "train_ohab",
+}
 
 
 def run_background(script_path: str, args: list[str], log_dir: str = "./outputs/logs") -> int:
@@ -99,6 +104,9 @@ def main():
   # 指定参数后台运行
   uv run python scripts/run.py train_arrive --daemon --preset best_quality --time-limit 7200
 
+  # 传递交叉验证折数
+  uv run python scripts/run.py train_ohab --daemon --num-bag-folds 5
+
   # 运行试驾预测
   uv run python scripts/run.py train_test_drive --daemon
 
@@ -106,8 +114,8 @@ def main():
   train_arrive       - 到店预测训练（核心任务）
   train_test_drive   - 试驾预测训练
   train_ohab         - OHAB 评级训练
-  train_arrive_oot   - 到店预测训练（OOT验证，新数据）
-  train_ohab_oot     - OHAB 评级训练（OOT验证，新数据）
+  train_arrive_oot   - 兼容旧名称，内部转发到 train_arrive
+  train_ohab_oot     - 兼容旧名称，内部转发到 train_ohab
         """,
     )
 
@@ -144,6 +152,11 @@ def main():
         help="训练时间限制（秒）",
     )
     parser.add_argument(
+        "--num-bag-folds",
+        type=int,
+        help="交叉验证折数（0 表示禁用）",
+    )
+    parser.add_argument(
         "--test-size",
         type=float,
         help="测试集比例",
@@ -166,8 +179,12 @@ def main():
 
     args = parser.parse_args()
 
+    resolved_task = TASK_SCRIPT_ALIASES.get(args.task, args.task)
+    if resolved_task != args.task:
+        print(f"提示: 任务 {args.task} 已统一到 {resolved_task}，自动转发。")
+
     # 确定脚本路径
-    script_path = Path(__file__).parent / f"{args.task}.py"
+    script_path = Path(__file__).parent / f"{resolved_task}.py"
     if not script_path.exists():
         print(f"错误: 脚本不存在: {script_path}")
         sys.exit(1)
@@ -182,6 +199,8 @@ def main():
         pass_args.extend(["--preset", args.preset])
     if args.time_limit:
         pass_args.extend(["--time-limit", str(args.time_limit)])
+    if args.num_bag_folds is not None:
+        pass_args.extend(["--num-bag-folds", str(args.num_bag_folds)])
     if args.test_size:
         pass_args.extend(["--test-size", str(args.test_size)])
     if args.output_dir:
