@@ -233,6 +233,32 @@ print(f"释放空间: {result['freed_mb']:.1f} MB")
 
 ## 故障排查
 
+### Q: 遇到 KeyError: '线索创建时间' 怎么办？
+
+这是数据适配器列名映射错误导致的问题。详见 [故障排查指南](./TROUBLESHOOTING.md#数据适配器问题)。
+
+**快速验证**：
+
+```bash
+# 诊断数据格式
+uv run python scripts/diagnose_data.py ./data/202603.tsv
+
+# 确保代码已同步
+git pull
+```
+
+### Q: --time-limit 参数如何设置？
+
+`--time-limit` 控制 AutoGluon 的训练时间（秒）。时间越长，模型尝试的算法越多，质量越高。
+
+| time-limit | 推荐预设 | 适用场景 |
+|------------|----------|----------|
+| 600 | `medium_quality` | 快速验证 |
+| 1800 | `good_quality` | 初步评估 |
+| 3600 | `high_quality` | 生产使用（默认） |
+
+**重要**：时间应与预设匹配。详见 [训练脚本说明](./TRAINING.md#--time-limit-参数详解)。
+
 ### Q: 磁盘空间不足怎么办？
 
 1. 使用更轻量的 preset：`--preset medium_quality`
@@ -245,3 +271,5 @@ print(f"释放空间: {result['freed_mb']:.1f} MB")
 2. 检查磁盘空间：`df -h`
 3. 查看任务状态：`uv run python scripts/monitor.py list`
 4. 清理残留文件后重试
+
+更多问题请参考 [故障排查指南](./TROUBLESHOOTING.md)。
