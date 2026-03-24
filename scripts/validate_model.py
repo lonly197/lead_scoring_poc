@@ -214,8 +214,44 @@ def main():
         df = df[df[target] != "Unknown"].copy()
         logger.info(f"过滤 Unknown 后: {len(df)} 行")
 
-    # OOT 测试集切分（避免数据泄露）
-    if args.oot_test:
+    # 自动识别防泄漏切分标记 (Smart Test Set Filtering)
+    metadata = load_feature_metadata(model_path)
+    split_info = metadata.get("split_info", {})
+    
+    if split_info:
+        logger.info(f"读取到模型切分元数据，模式: {split_info.get('mode')}")
+        mode = split_info.get("mode")
+        
+        if mode in ["oot", "oot_manual"]:
+            time_column = "线索创建时间"
+            if time_column not in df.columns:
+                logger.error(f"OOT 模式需要 '{time_column}' 列，但数据中不存在")
+                sys.exit(1)
+            
+            df[time_column] = pd.to_datetime(df[time_column], errors="coerce")
+            valid_end_str = split_info.get("valid_end")
+            valid_end = pd.Timestamp(valid_end_str)
+
+            df = df[df[time_column] >= valid_end].copy()
+            logger.info(f"OOT 测试集自动切分: 时间 >= {valid_end_str}")
+            
+        elif mode == "random":
+            # 降级情况下的防泄漏过滤
+            if "test_ids" in split_info and "id_column" in split_info:
+                id_col = split_info["id_column"]
+                test_ids = set(split_info["test_ids"])
+                df = df[df[id_col].isin(test_ids)].copy()
+                logger.info(f"随机切分防泄漏: 根据 {id_col} 提取了 {len(test_ids)} 个测试集样本")
+            elif "test_indices" in split_info:
+                test_indices = split_info["test_indices"]
+                # 注意：物理索引过滤前提是 df 未被重新排序或清洗改变行号
+                df = df.iloc[test_indices].copy()
+                logger.info(f"随机切分防泄漏: 根据物理索引提取了 {len(test_indices)} 个测试集样本")
+            else:
+                logger.warning("模型为随机切分但未找到测试集标记，可能存在数据泄漏风险！")
+                
+    elif args.oot_test:
+        # 向后兼容：手动指定 OOT 测试集
         time_column = "线索创建时间"
         if time_column not in df.columns:
             logger.error(f"OOT 模式需要 '{time_column}' 列，但数据中不存在")
@@ -226,12 +262,16 @@ def main():
 
         # 测试集：时间 >= valid_end
         df = df[df[time_column] >= valid_end].copy()
-        logger.info(f"OOT 测试集切分: 时间 >= {args.valid_end}")
-        logger.info(f"测试集样本量: {len(df)} 行")
+        logger.info(f"OOT 测试集切分(手动参数): 时间 >= {args.valid_end}")
+    
+    else:
+        logger.warning("未启用防泄漏过滤，当前验证集可能包含训练数据！")
 
-        if len(df) == 0:
-            logger.error("OOT 测试集为空，请检查 valid_end 参数或数据时间范围")
-            sys.exit(1)
+    logger.info(f"验证集最终样本量: {len(df)} 行")
+
+    if len(df) == 0:
+        logger.error("测试集为空，请检查数据时间范围或切分逻辑")
+        sys.exit(1)
 
     # 排除不需要的列（但保留目标列用于评估）
     excluded_columns = get_excluded_columns(target)

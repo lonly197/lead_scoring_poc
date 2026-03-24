@@ -61,57 +61,40 @@ uv run python scripts/run.py train_test_drive --daemon --preset high_quality
 uv run python scripts/run.py train_ohab --daemon --preset high_quality
 ```
 
-### OOT 验证训练（train_arrive_oot, train_ohab_oot）
+### OOT 验证训练 (统一智能版)
 
-适用于新格式数据（如 `202603.tsv`，Tab 分隔，无表头，需计算目标变量）。
+适用于新格式数据（如 `202602~03.csv`，跨度包含 2 月和 3 月）。现已统一入口至 `train_ohab.py`，脚本将自动根据数据时间跨度决定切分策略。
 
-**数据要求**：
-- 文件格式：`.tsv` 或 `.csv`（自动检测分隔符）
-- 自动启用数据适配器（`auto_adapt=True`）
-- 目标变量自动从原始时间字段派生
+**切分策略建议**：
+当数据跨度增加时，建议手动指定切分点以充分利用历史背景。
 
-**OOT 三层时间切分**：
-```
-训练集: < 2026-03-11
-验证集: 2026-03-11 ~ 2026-03-16
-测试集: >= 2026-03-16（有完整 7 天观察期）
-```
+| 数据情况 | 推荐命令 | 说明 |
+|----------|----------|------|
+| **自动模式** | `uv run scripts/run.py train_ohab --daemon` | **推荐：脚本将自动探查并切分** |
+| **2-3 月全量** | `... --train-end 2026-03-15 --valid-end 2026-03-20` | 手动优化长周期数据利用率 |
+
+**执行命令示例**：
 
 ```bash
-# 到店预测（7天窗口）- 后台运行
-uv run python scripts/run.py train_arrive_oot --daemon \
-    --data-path ./data/202603.tsv \
+# OHAB 评级 - 统一自适应运行 (支持 2-3 月长周期)
+uv run python scripts/run.py train_ohab --daemon \
+    --data-path ./data/202602_03_full.csv \
     --preset high_quality \
-    --time-limit 3600
-
-# OHAB 评级 - 后台运行
-uv run python scripts/run.py train_ohab_oot --daemon \
-    --data-path ./data/202603.tsv \
-    --preset high_quality \
-    --time-limit 3600
-
-# 自定义 OOT 切分日期
-uv run python scripts/run.py train_arrive_oot --daemon \
-    --data-path ./data/202603.tsv \
-    --train-end 2026-03-10 \
-    --valid-end 2026-03-15
-
-# 前台运行（调试用）
-uv run python scripts/train_arrive_oot.py --data-path ./data/202603.tsv
+    --num-bag-folds 5
 ```
 
-**查看 OOT 训练状态**：
+**关键优化**：
+- **防泄漏指纹**：脚本会自动记录测试集 ID，确保 `validate_model.py` 的评估结果真实可靠。
+- **自动降级**：若数据不足 14 天，自动退化为随机切分并保留防泄漏标记。
+
+**查看训练状态**：
 
 ```bash
 # 查看运行状态
 uv run python scripts/monitor.py status
 
-# 查看日志
-uv run python scripts/monitor.py log train_arrive_oot -f
-uv run python scripts/monitor.py log train_ohab_oot -f
-
-# 停止任务
-uv run python scripts/monitor.py stop train_arrive_oot
+# 查看日志 (统一使用 train_ohab)
+uv run python scripts/monitor.py log train_ohab -f
 ```
 
 ---

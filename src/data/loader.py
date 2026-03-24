@@ -468,6 +468,103 @@ def split_data_oot_three_way(
     return train_df, valid_df, test_df
 
 
+def smart_split_data(
+    df: pd.DataFrame,
+    target_label: str,
+    time_column: str = "线索创建时间",
+    min_oot_days: int = 14,
+    random_seed: int = 42,
+) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, dict]:
+    """
+    智能数据切分（自适应 OOT 或 随机切分）
+
+    自动探查数据的时间跨度：
+    - 若跨度 >= min_oot_days：按照 70% 训练，15% 验证，15% 测试的时间比例自动进行 OOT 切分。
+    - 若跨度 < min_oot_days：降级为随机切分（80%训练，20%测试），并在返回的元数据中记录测试集索引以防泄漏。
+
+    Args:
+        df: 数据 DataFrame
+        target_label: 目标变量名
+        time_column: 时间列名
+        min_oot_days: 触发 OOT 的最少时间跨度（天数）
+        random_seed: 随机种子
+
+    Returns:
+        训练集, 验证集(若降级则为空), 测试集, 元数据字典(包含切分模式和测试集标记)
+    """
+    logger.info(f"执行智能数据切分 (Smart Split)...")
+
+    # 预处理时间列
+    df = df.copy()
+    # 为保证可追溯，确保索引唯一且重置
+    if not df.index.is_unique:
+        df = df.reset_index(drop=True)
+    
+    df[time_column] = pd.to_datetime(df[time_column], errors="coerce")
+    valid_mask = df[time_column].notna() & df[target_label].notna()
+    df_valid = df[valid_mask].copy()
+
+    if len(df_valid) == 0:
+        raise ValueError("有效数据为空，无法进行切分")
+
+    min_date = df_valid[time_column].min()
+    max_date = df_valid[time_column].max()
+    time_span = (max_date - min_date).days
+
+    logger.info(f"数据时间范围: {min_date.date()} 至 {max_date.date()} (跨度: {time_span} 天)")
+
+    split_metadata = {
+        "time_span_days": time_span,
+        "min_date": str(min_date.date()),
+        "max_date": str(max_date.date()),
+    }
+
+    if time_span >= min_oot_days:
+        logger.info(f"跨度满足 OOT 要求 (>= {min_oot_days} 天)，触发自动 OOT 切分")
+        # 按 70% / 15% / 15% 的时间跨度划分
+        total_seconds = (max_date - min_date).total_seconds()
+        train_end_date = min_date + pd.Timedelta(seconds=total_seconds * 0.70)
+        valid_end_date = min_date + pd.Timedelta(seconds=total_seconds * 0.85)
+
+        # 转换为字符串日期（去除时分秒，按天切分）
+        train_end_str = str(train_end_date.date())
+        valid_end_str = str(valid_end_date.date())
+
+        logger.info(f"自动计算切分点: train_end={train_end_str}, valid_end={valid_end_str}")
+
+        train_df, valid_df, test_df = split_data_oot_three_way(
+            df_valid, target_label, time_column, train_end_str, valid_end_str
+        )
+
+        split_metadata["mode"] = "oot"
+        split_metadata["train_end"] = train_end_str
+        split_metadata["valid_end"] = valid_end_str
+        split_metadata["test_indices"] = [] # OOT 模式通过时间过滤，不需要记索引
+
+    else:
+        logger.warning(f"跨度不满足 OOT 要求 (< {min_oot_days} 天)，降级为随机切分 (Random Split)")
+        
+        train_df, test_df = split_data(
+            df_valid, target_label, test_size=0.2, random_seed=random_seed, stratify=True
+        )
+        # 验证集为空
+        valid_df = pd.DataFrame(columns=df_valid.columns)
+        
+        split_metadata["mode"] = "random"
+        # 记录测试集的原始索引或唯一 ID，这里使用 dataframe 的 index (需保存下来)
+        # 假设原始 df 的 index 具有业务唯一性，推荐记录 "线索唯一ID"
+        id_col = "线索唯一ID"
+        if id_col in test_df.columns:
+            split_metadata["test_ids"] = test_df[id_col].tolist()
+            split_metadata["id_column"] = id_col
+            logger.info(f"已记录 {len(test_df)} 个测试集 {id_col} 用于后续防泄漏验证")
+        else:
+            split_metadata["test_indices"] = test_df.index.tolist()
+            logger.warning(f"未找到 '{id_col}'，记录测试集物理行索引用于防泄漏验证（存在一定风险）")
+
+    return train_df, valid_df, test_df, split_metadata
+
+
 def prepare_features(
     df: pd.DataFrame,
     excluded_columns: List[str],
