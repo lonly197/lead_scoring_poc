@@ -44,7 +44,7 @@ def parse_args():
     parser.add_argument(
         "--model-path",
         type=str,
-        default="outputs/models/ohab_model",
+        default="outputs/models/ohab_oot",
         help="模型路径",
     )
     parser.add_argument(
@@ -103,11 +103,44 @@ def load_model(model_path: Path):
     raise RuntimeError(f"无法加载模型: {model_path}")
 
 
+def find_available_model(default_path: Path) -> Path:
+    """查找可用的模型目录，优先使用 OOT 版本"""
+    if default_path.exists():
+        return default_path
+
+    # 搜索 outputs/models/ 下的模型目录
+    models_dir = Path("outputs/models")
+    if models_dir.exists():
+        # 优先级：ohab_oot > ohab_model > 其他
+        for name in ["ohab_oot", "ohab_model"]:
+            candidate = models_dir / name
+            if candidate.exists() and (candidate / "predictor.pkl").exists():
+                return candidate
+
+        # 查找其他有效模型目录
+        for model_dir in models_dir.iterdir():
+            if model_dir.is_dir() and (model_dir / "predictor.pkl").exists():
+                return model_dir
+
+    return default_path  # 返回默认路径，让后续代码报错
+
+
 def main():
     args = parse_args()
     setup_logging(level=logging.INFO)
 
     model_path = Path(args.model_path)
+    # 如果指定的模型路径不存在，尝试自动检测
+    if not model_path.exists():
+        detected_path = find_available_model(model_path)
+        if detected_path.exists():
+            logger.info(f"模型路径 {model_path} 不存在，使用检测到的模型: {detected_path}")
+            model_path = detected_path
+        else:
+            logger.error(f"未找到可用模型，请先运行训练脚本")
+            logger.error(f"  uv run python scripts/train_ohab_oot.py")
+            sys.exit(1)
+
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 

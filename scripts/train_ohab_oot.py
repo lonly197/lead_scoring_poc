@@ -205,10 +205,15 @@ def main():
         )
         logger.info("启用类别权重自动平衡 (sample_weight='balance_weight')")
 
-        train_valid_df = pd.concat([train_df, valid_df], ignore_index=True)
+        # 关键修改：不再合并验证集到训练数据
+        # 使用 tuning_data 让 AutoGluon 用验证集做模型选择
+        # 这样验证集性能才能真正反映泛化能力
+        logger.info("训练策略: 使用验证集作为 tuning_data（模型选择）")
+        logger.info(f"训练集: {len(train_df):,} 行, 验证集(tuning): {len(valid_df):,} 行")
 
         predictor.train(
-            train_data=train_valid_df,
+            train_data=train_df,
+            tuning_data=valid_df,  # 验证集用于模型选择，不参与训练
             presets=args.preset,
             time_limit=args.time_limit,
             excluded_columns=excluded_columns,
