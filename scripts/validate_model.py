@@ -162,7 +162,33 @@ def main():
     logger.info("=" * 60)
 
     data_path = args.data_path or "./data/20260308-v2.csv"
-    loader = DataLoader(data_path)
+
+    # 自动检测数据格式，新格式数据需要 auto_adapt=True 来计算目标变量
+    from pathlib import Path as PathLib
+    data_file = PathLib(data_path)
+    suffix = data_file.suffix.lower()
+
+    # 检查是否为新格式数据（无表头的 TSV）
+    use_auto_adapt = False
+    if suffix == ".tsv":
+        use_auto_adapt = True
+        logger.info("检测到 TSV 格式，启用 auto_adapt 模式")
+    else:
+        # 尝试检测是否有表头（CSV 第一行包含中文）
+        try:
+            import csv
+            with open(data_path, 'r', encoding='utf-8') as f:
+                reader = csv.reader(f)
+                first_row = next(reader)
+                # 如果第一行没有中文，可能是无表头数据
+                has_chinese = any('\u4e00' <= c <= '\u9fff' for c in str(first_row))
+                if not has_chinese:
+                    use_auto_adapt = True
+                    logger.info("检测到无表头数据，启用 auto_adapt 模式")
+        except Exception:
+            pass
+
+    loader = DataLoader(data_path, auto_adapt=use_auto_adapt)
     df = loader.load()
 
     # 过滤 Unknown
