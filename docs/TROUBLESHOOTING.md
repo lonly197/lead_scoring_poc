@@ -111,6 +111,46 @@ leakage_columns = [
 
 **修复提交**：`待提交` - fix: add missing leakage columns for OHAB training
 
+---
+
+## 多分类训练问题
+
+### TypeError: Could not convert string to numeric
+
+**问题现象**：
+
+```
+TypeError: Could not convert string 'AAHHHAAHH...' to numeric
+```
+
+在 `loader.py` 第 457 行报错。
+
+**问题原因**：
+
+`split_data_oot_three_way` 函数设计时只考虑了二分类场景，调用 `mean()` 计算正样本率。但 OHAB 评级是多分类任务，目标变量是字符串类型（H/A/B/O），无法计算均值。
+
+**修复方案**：
+
+修改 `src/data/loader.py` 中的 `split_data_oot_three_way` 函数，检测目标变量类型：
+
+```python
+# loader.py 第 454-467 行
+# 检测目标变量类型，区分二分类和多分类
+is_numeric_target = pd.api.types.is_numeric_dtype(df[target_label])
+
+for name, subset in [("训练集", train_df), ("验证集", valid_df), ("测试集", test_df)]:
+    dist = subset[target_label].value_counts(normalize=True)
+    if is_numeric_target:
+        # 二分类：计算正样本率
+        positive_rate = subset[target_label].mean() * 100
+        logger.info(f"{name}: 正样本率 {positive_rate:.2f}%, 分布: {dist.to_dict()}")
+    else:
+        # 多分类：只显示分布
+        logger.info(f"{name}: 目标分布: {dist.to_dict()}")
+```
+
+**修复提交**：`待提交` - fix: support multiclass targets in split_data_oot_three_way
+
 ### --time-limit 参数详解
 
 **参数含义**：

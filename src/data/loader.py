@@ -452,10 +452,18 @@ def split_data_oot_three_way(
         raise ValueError("测试集为空")
 
     # 打印统计信息
+    # 检测目标变量类型，区分二分类和多分类
+    is_numeric_target = pd.api.types.is_numeric_dtype(df[target_label])
+
     for name, subset in [("训练集", train_df), ("验证集", valid_df), ("测试集", test_df)]:
         dist = subset[target_label].value_counts(normalize=True)
-        positive_rate = subset[target_label].mean() * 100
-        logger.info(f"{name}: 正样本率 {positive_rate:.2f}%, 分布: {dist.to_dict()}")
+        if is_numeric_target:
+            # 二分类：计算正样本率
+            positive_rate = subset[target_label].mean() * 100
+            logger.info(f"{name}: 正样本率 {positive_rate:.2f}%, 分布: {dist.to_dict()}")
+        else:
+            # 多分类：只显示分布
+            logger.info(f"{name}: 目标分布: {dist.to_dict()}")
 
     return train_df, valid_df, test_df
 
