@@ -156,25 +156,40 @@ uv run python scripts/monitor.py stop --all
 
 ### Q: 如何运行 OOT 验证训练？
 
-OOT（Out-of-Time）验证适用于新格式数据，使用三层时间切分：
+OOT（Out-of-Time）验证适用于新格式数据，现已统一到 `train_arrive.py` / `train_ohab.py`，脚本会自动探查时间跨度并决定是否启用 OOT：
 
 ```bash
-# 后台运行到店预测（7天窗口）
-uv run python scripts/run.py train_arrive_oot --daemon \
+# 后台运行到店预测（统一入口）
+uv run python scripts/run.py train_arrive --daemon \
     --data-path ./data/202603.tsv
 
-# 后台运行 OHAB 评级
-uv run python scripts/run.py train_ohab_oot --daemon \
+# 后台运行 OHAB 评级（统一入口）
+uv run python scripts/run.py train_ohab --daemon \
     --data-path ./data/202603.tsv
 
 # 查看训练状态
 uv run python scripts/monitor.py status
 
 # 持续跟踪日志
-uv run python scripts/monitor.py log train_arrive_oot -f
+uv run python scripts/monitor.py log train_arrive -f
+uv run python scripts/monitor.py log train_ohab -f
 ```
 
 **OOT 切分说明**：
+
+- 当 `线索创建时间` 跨度 `>= 14` 天时，脚本自动按时间轴做 `70%训练 / 15%验证 / 15%测试`
+- 当跨度 `< 14` 天时，脚本自动降级为随机切分，并记录测试集指纹供验证脚本隔离
+
+如果你希望手动控制切分点：
+
+```bash
+uv run python scripts/train_ohab.py \
+    --data-path ./data/202602~03.tsv \
+    --train-end 2026-03-15 \
+    --valid-end 2026-03-20
+```
+
+对于 `202603.tsv` 这类单月数据，典型自动 OOT 结果可能接近下表：
 
 | 数据集 | 时间范围 | 用途 |
 |--------|----------|------|
@@ -204,6 +219,18 @@ train_df, test_df = split_data_oot(
 ```
 
 **优势**：更好地模拟真实预测场景（用历史数据预测未来）。
+
+### Q: 如何验证模型且避免读到旧的 `ohab_oot` 目录？
+
+统一训练脚本默认输出到 `./outputs/models/ohab_model`。验证时建议显式指定模型路径：
+
+```bash
+uv run python scripts/validate_model.py \
+    --model-path ./outputs/models/ohab_model \
+    --data-path ./data/202602~03.tsv
+```
+
+如果模型元数据中存在 `split_info`，`validate_model.py` 会自动只评估训练时定义的 OOT 测试集；如果数据里包含 `is_final_ordered`，还会额外输出“AI 评级 vs 最终下定”的业务转化统计。
 
 ---
 

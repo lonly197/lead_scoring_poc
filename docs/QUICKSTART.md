@@ -30,7 +30,9 @@ uv run python scripts/diagnose_data.py ./data/202603.tsv
 **诊断功能**：
 - 检测分隔符和列数
 - 验证关键列是否存在（线索创建时间、线索唯一ID 等）
-- 显示 OHAB 评级分布
+- 显示 OHAB 评级分布、是否仍保留 O 级
+- 检查 `is_final_ordered` 是否存在及其分布
+- 输出 `线索创建时间` 范围，便于确认是否会触发自动 OOT
 - 列出所有列名和样本值（方便调试映射问题）
 
 ---
@@ -78,7 +80,7 @@ uv run python scripts/run.py train_ohab --daemon --preset high_quality
 ```bash
 # OHAB 评级 - 统一自适应运行 (支持 2-3 月长周期)
 uv run python scripts/run.py train_ohab --daemon \
-    --data-path ./data/202602_03_full.csv \
+    --data-path ./data/202602~03.tsv \
     --preset high_quality \
     --num-bag-folds 5
 ```
@@ -173,12 +175,18 @@ print('评估指标:', p.eval_metric)
 ### 验证脚本
 
 ```bash
-# 使用验证脚本
-uv run python scripts/validate_model.py
+# 使用验证脚本（默认读取 ./outputs/models/ohab_model）
+uv run python scripts/validate_model.py --data-path ./data/202602~03.tsv
 
-# 使用新数据验证
-uv run python scripts/validate_model.py --data-path /path/to/new_data.csv
+# 显式指定模型路径，避免误用旧的 ohab_oot 目录
+uv run python scripts/validate_model.py \
+    --model-path ./outputs/models/ohab_model \
+    --data-path ./data/202602~03.tsv
 ```
+
+**验证行为说明**：
+- 若模型元数据中存在 `split_info`，脚本会自动按训练时记录的 `valid_end` 只评估 OOT 测试集，避免混入训练段和验证段数据。
+- 若验证数据中存在 `is_final_ordered`，脚本会额外输出“AI 评级 vs 最终下定”的业务转化统计，但该列不会参与模型特征。
 
 ---
 

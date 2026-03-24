@@ -145,17 +145,31 @@ Unknown    76,819 (27%)  - 未评级
 
 ```bash
 # 推荐配置（平衡时间和质量）
-uv run python scripts/train_ohab_oot.py \
+uv run python scripts/train_ohab.py \
     --data-path ./data/202603.tsv \
     --preset good_quality \
     --time-limit 1800
 
 # 快速验证配置（调试用）
-uv run python scripts/train_ohab_oot.py \
+uv run python scripts/train_ohab.py \
     --data-path ./data/202603.tsv \
     --preset medium_quality \
     --time-limit 600
 ```
+
+### OHAB 验证建议
+
+```bash
+# 训练完成后，显式使用统一输出目录验证
+uv run python scripts/validate_model.py \
+    --model-path ./outputs/models/ohab_model \
+    --data-path ./data/202603.tsv
+```
+
+验证脚本会优先读取训练时保存的 `feature_metadata.json`：
+- `mode=oot` / `mode=oot_manual` 时，只评估 `时间 >= valid_end` 的 OOT 测试段
+- `mode=random` 时，根据测试集 ID 或索引进行物理隔离
+- 数据中存在 `is_final_ordered` 时，会额外输出终态下定转化率分析
 
 ---
 

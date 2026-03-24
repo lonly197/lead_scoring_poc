@@ -36,6 +36,7 @@ def load_feature_metadata(model_path: Path) -> dict:
     return {}
 
 logger = logging.getLogger(__name__)
+FINAL_ORDERED_COLUMN = "is_final_ordered"
 
 
 def parse_args():
@@ -44,7 +45,7 @@ def parse_args():
     parser.add_argument(
         "--model-path",
         type=str,
-        default="outputs/models/ohab_oot",
+        default="outputs/models/ohab_model",
         help="模型路径",
     )
     parser.add_argument(
@@ -121,15 +122,15 @@ def load_model(model_path: Path):
 
 
 def find_available_model(default_path: Path) -> Path:
-    """查找可用的模型目录，优先使用 OOT 版本"""
+    """查找可用的模型目录，优先使用统一训练输出目录"""
     if default_path.exists():
         return default_path
 
     # 搜索 outputs/models/ 下的模型目录
     models_dir = Path("outputs/models")
     if models_dir.exists():
-        # 优先级：ohab_oot > ohab_model > 其他
-        for name in ["ohab_oot", "ohab_model"]:
+        # 优先级：ohab_model > ohab_oot > 其他
+        for name in ["ohab_model", "ohab_oot"]:
             candidate = models_dir / name
             if candidate.exists() and (candidate / "predictor.pkl").exists():
                 return candidate
@@ -155,7 +156,7 @@ def main():
             model_path = detected_path
         else:
             logger.error(f"未找到可用模型，请先运行训练脚本")
-            logger.error(f"  uv run python scripts/train_ohab_oot.py")
+            logger.error(f"  uv run python scripts/train_ohab.py")
             sys.exit(1)
 
     output_dir = Path(args.output_dir)
@@ -273,6 +274,11 @@ def main():
         logger.error("测试集为空，请检查数据时间范围或切分逻辑")
         sys.exit(1)
 
+    final_ordered = None
+    if FINAL_ORDERED_COLUMN in df.columns:
+        final_ordered = df[FINAL_ORDERED_COLUMN].copy()
+        logger.info(f"检测到 {FINAL_ORDERED_COLUMN}，将仅用于业务转化验证")
+
     # 排除不需要的列（但保留目标列用于评估）
     excluded_columns = get_excluded_columns(target)
     cols_to_drop = [col for col in excluded_columns if col in df.columns and col != target]
@@ -356,6 +362,10 @@ def main():
         "预测标签": y_pred.values if hasattr(y_pred, "values") else y_pred,
     })
 
+    if final_ordered is not None:
+        final_ordered = final_ordered.loc[df_processed.index].fillna(0).astype(int)
+        results_df["实际下定"] = final_ordered.values
+
     # 添加概率
     for col in y_proba.columns:
         results_df[f"概率_{col}"] = y_proba[col].values
@@ -386,7 +396,7 @@ def main():
         f.write(report)
 
         # === 追加业务转化漏斗验证 (终态 O 验证) ===
-        if "is_final_ordered" in df_processed.columns:
+        if final_ordered is not None:
             f.write("\n\n" + "=" * 60 + "\n")
             f.write("🎯 业务转化效果验证 (AI 评级 vs 最终下定)\n")
             f.write("=" * 60 + "\n")
@@ -399,7 +409,7 @@ def main():
             # 使用预测标签和实际隔离标签做聚合
             final_df = pd.DataFrame({
                 "predicted_level": y_pred,
-                "is_ordered": df_processed["is_final_ordered"].values
+                "is_ordered": final_ordered.values,
             })
             
             # 按 H, A, B 的顺序输出

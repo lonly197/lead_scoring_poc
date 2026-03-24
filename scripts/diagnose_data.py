@@ -45,7 +45,7 @@ def diagnose(file_path: str):
         print(f"  - 检测分隔符: 逗号 (,)")
 
     # 4. 检查列数
-    columns = first_line.strip().split(sep)
+    columns = first_line.rstrip("\r\n").split(sep)
     print(f"\n列数分析:")
     print(f"  - 实际列数: {len(columns)}")
 
@@ -77,7 +77,14 @@ def diagnose(file_path: str):
         print(f"  - 数据量: {len(df):,} 行")
         print(f"  - 列数: {len(df.columns)}")
         print(f"\n关键列检查:")
-        key_columns = ["线索创建时间", "线索唯一ID", "到店时间", "试驾时间", "线索评级结果"]
+        key_columns = [
+            "线索创建时间",
+            "线索唯一ID",
+            "到店时间",
+            "试驾时间",
+            "线索评级结果",
+            "is_final_ordered",
+        ]
         for col in key_columns:
             exists = "✅" if col in df.columns else "❌"
             print(f"  {exists} {col}")
@@ -89,6 +96,11 @@ def diagnose(file_path: str):
         if "线索创建时间" in df.columns:
             print(f"\n线索创建时间示例:")
             print(f"  {df['线索创建时间'].head(3).tolist()}")
+            time_series = df["线索创建时间"].dropna()
+            if not time_series.empty:
+                min_time = time_series.min()
+                max_time = time_series.max()
+                print(f"线索创建时间范围: {min_time} -> {max_time}")
 
         # 检查 OHAB 相关列
         print(f"\n{'='*60}")
@@ -108,8 +120,16 @@ def diagnose(file_path: str):
         if "线索评级_试驾前" in df.columns:
             print(f"\n线索评级_试驾前 分布:")
             print(df["线索评级_试驾前"].value_counts(dropna=False))
+            has_o_level = "O" in set(df["线索评级_试驾前"].dropna().unique())
+            print(f"O 级是否仍存在于线索评级_试驾前: {'是' if has_o_level else '否'}")
         else:
             print("❌ 线索评级_试驾前 列不存在")
+
+        if "is_final_ordered" in df.columns:
+            print(f"\nis_final_ordered 分布:")
+            print(df["is_final_ordered"].value_counts(dropna=False))
+        else:
+            print("❌ is_final_ordered 列不存在")
 
         # 显示所有列名（帮助调试列名映射）
         print(f"\n{'='*60}")
