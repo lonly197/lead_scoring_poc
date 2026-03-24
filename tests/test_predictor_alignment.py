@@ -24,12 +24,14 @@ class FakeTabularPredictor:
         self.last_feature_importance_columns = None
         self.fit_train_columns = None
         self.fit_tuning_columns = None
+        self.fit_kwargs = None
         FakeTabularPredictor.last_instance = self
 
     def fit(self, train_data, **kwargs):
         self.fit_train_columns = list(train_data.columns)
         tuning_data = kwargs.get("tuning_data")
         self.fit_tuning_columns = list(tuning_data.columns) if tuning_data is not None else None
+        self.fit_kwargs = kwargs
         return self
 
     def predict(self, data):
@@ -93,6 +95,7 @@ def test_train_aligns_tuning_data_to_training_feature_set(monkeypatch, tmp_path)
         train_data=train_data,
         tuning_data=tuning_data,
         excluded_columns=["leak_col"],
+        num_bag_folds=5,
         presets="medium_quality",
         time_limit=1,
     )
@@ -101,6 +104,48 @@ def test_train_aligns_tuning_data_to_training_feature_set(monkeypatch, tmp_path)
     assert predictor._feature_columns == ["feat_a", "feat_b"]
     assert fake_predictor.fit_train_columns == ["feat_a", "feat_b", "label"]
     assert fake_predictor.fit_tuning_columns == ["feat_a", "feat_b", "label"]
+    assert fake_predictor.fit_kwargs["use_bag_holdout"] is True
+
+
+def test_train_does_not_inject_use_bag_holdout_without_bagging(monkeypatch, tmp_path):
+    install_fake_autogluon(monkeypatch)
+
+    train_data = pd.DataFrame({"feat_a": [1, 2], "label": [0, 1]})
+    tuning_data = pd.DataFrame({"feat_a": [3, 4], "label": [1, 0]})
+
+    predictor = LeadScoringPredictor(label="label", output_path=str(tmp_path))
+    predictor.train(
+        train_data=train_data,
+        tuning_data=tuning_data,
+        presets="medium_quality",
+        time_limit=1,
+        num_bag_folds=None,
+    )
+
+    fake_predictor = FakeTabularPredictor.last_instance
+    assert "use_bag_holdout" not in fake_predictor.fit_kwargs
+
+
+def test_train_rejects_invalid_bagging_with_tuning_configuration(monkeypatch, tmp_path):
+    install_fake_autogluon(monkeypatch)
+
+    train_data = pd.DataFrame({"feat_a": [1, 2], "label": [0, 1]})
+    tuning_data = pd.DataFrame({"feat_a": [3, 4], "label": [1, 0]})
+
+    predictor = LeadScoringPredictor(label="label", output_path=str(tmp_path))
+
+    with pytest.raises(
+        ValueError,
+        match="use_bag_holdout=True",
+    ):
+        predictor.train(
+            train_data=train_data,
+            tuning_data=tuning_data,
+            presets="medium_quality",
+            time_limit=1,
+            num_bag_folds=5,
+            use_bag_holdout=False,
+        )
 
 
 def test_predict_proba_raises_clear_error_when_feature_missing(tmp_path):

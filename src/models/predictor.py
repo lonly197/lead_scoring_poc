@@ -123,6 +123,37 @@ class LeadScoringPredictor:
             include_label=include_label,
         )
 
+    def _configure_bagging_holdout(self, fit_kwargs: Dict[str, Any]) -> None:
+        """
+        兼容 AutoGluon 1.5 对 bagging + tuning_data 的约束。
+
+        当启用 bagging 且传入 tuning_data 时，AutoGluon 1.5 需要显式
+        设置 use_bag_holdout=True，否则会在 fit 时直接报错。
+        """
+        tuning_data = fit_kwargs.get("tuning_data")
+        has_tuning_data = isinstance(tuning_data, pd.DataFrame) and len(tuning_data) > 0
+
+        num_bag_folds = fit_kwargs.get("num_bag_folds")
+        has_bagging = isinstance(num_bag_folds, int) and num_bag_folds > 0
+
+        if not (has_tuning_data and has_bagging):
+            return
+
+        use_bag_holdout = fit_kwargs.get("use_bag_holdout")
+        if use_bag_holdout is False:
+            raise ValueError(
+                "检测到 tuning_data 与 num_bag_folds>0 同时启用，但 use_bag_holdout=False。"
+                "AutoGluon 1.5 下 bagging 模式不能直接使用 tuning_data，"
+                "请改为 use_bag_holdout=True。"
+            )
+
+        if use_bag_holdout is None:
+            fit_kwargs["use_bag_holdout"] = True
+            logger.info(
+                "检测到 bagging + tuning_data，已自动启用 use_bag_holdout=True "
+                "以兼容 AutoGluon 1.5"
+            )
+
     def train(
         self,
         train_data: pd.DataFrame,
@@ -209,6 +240,8 @@ class LeadScoringPredictor:
                     f"{dataset_name} 对齐后特征数: "
                     f"{len(fit_kwargs[dataset_name].columns) - (1 if include_label else 0)}"
                 )
+
+        self._configure_bagging_holdout(fit_kwargs)
 
         # 训练
         self._predictor.fit(train_data, **fit_kwargs)

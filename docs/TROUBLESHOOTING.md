@@ -182,6 +182,30 @@ uv run python scripts/run.py train_ohab_oot --train-end 2026-03-11 --valid-end 2
 uv run python scripts/train_ohab.py --train-end 2026-03-11 --valid-end 2026-03-16
 ```
 
+### `X_val, y_val is not None, but bagged mode was specified`
+
+**问题现象**：
+
+```text
+AssertionError: X_val, y_val is not None, but bagged mode was specified.
+```
+
+通常出现在 `train_arrive.py` / `train_ohab.py` 的 OOT 路径：脚本传入 `tuning_data=valid_df`，同时又启用了 `num_bag_folds > 0`。
+
+**问题原因**：
+
+AutoGluon 1.5 在 bagging 模式下不允许直接使用 `tuning_data` 作为验证集，除非显式设置 `use_bag_holdout=True`。否则会在 `fit()` 入口直接拒绝这组参数。
+
+**当前仓库行为**：
+
+`LeadScoringPredictor` 会在检测到 `tuning_data + num_bag_folds > 0` 时自动注入 `use_bag_holdout=True`，保持 OOT 验证集不并回训练集，同时兼容 AutoGluon 1.5。
+
+**排查建议**：
+
+1. 确认服务器代码已经同步到包含该修复的最新版本
+2. 检查日志中是否出现 `已自动启用 use_bag_holdout=True 以兼容 AutoGluon 1.5`
+3. 若自定义调用 `LeadScoringPredictor.train()`，不要显式传入 `use_bag_holdout=False`
+
 ### --time-limit 参数详解
 
 **参数含义**：

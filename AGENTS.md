@@ -76,6 +76,7 @@ train_test_drive.py  → 辅助任务（试驾预测）
 **避免数据泄露**：
 - 使用 `tuning_data` 参数传入验证集，而非合并到 `train_data`
 - AutoGluon 会用验证集做模型选择，但不参与训练
+- 当启用 bagging（如 `num_bag_folds > 0`）时，`LeadScoringPredictor` 会自动设置 `use_bag_holdout=True` 以兼容 AutoGluon 1.5
 - 验证集性能才能真正反映泛化能力
 
 ## 关键文件
