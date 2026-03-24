@@ -4,6 +4,59 @@
 
 ---
 
+## [2026-03-24] run.py 参数转发缺口修复
+
+### 背景
+
+在统一训练入口重构完成后，`train_ohab.py` 和 `train_arrive.py` 已支持 `--num-bag-folds`，文档中的示例命令也同步使用了该参数。
+
+但线上执行以下命令时：
+
+```bash
+uv run python scripts/run.py train_ohab --daemon \
+    --data-path ./data/202602~03.tsv \
+    --preset high_quality \
+    --num-bag-folds 5
+```
+
+`run.py` 会直接报错 `unrecognized arguments: --num-bag-folds 5`。
+
+### 根因分析
+
+- **参数并未废弃**：`scripts/train_ohab.py` 和 `scripts/train_arrive.py` 仍然保留 `--num-bag-folds`，并继续将其传给 AutoGluon 的 `num_bag_folds`。
+- **问题出在包装器**：`scripts/run.py` 在 `1e950db` 这轮“统一智能自适应训练架构”改造时，没有同步更新参数声明与转发逻辑。
+- **属于重构遗漏**：文档描述与底层训练脚本是正确的，真正失效的是 `run.py` 这一层参数代理。
+- **同源兼容性缺口**：`run.py` 还保留了 `train_arrive_oot` / `train_ohab_oot` 旧任务名，但对应脚本已删除，说明同一轮重构中包装层没有完全跟上训练入口整合。
+
+### 修复内容
+
+#### 1. 包装器参数补齐 (`scripts/run.py`)
+- 新增 `--num-bag-folds` 参数定义。
+- 在构建子进程命令时，显式向训练脚本转发 `--num-bag-folds`。
+
+#### 2. 旧任务名兼容转发 (`scripts/run.py`)
+- 为 `train_arrive_oot` 增加到 `train_arrive` 的兼容映射。
+- 为 `train_ohab_oot` 增加到 `train_ohab` 的兼容映射。
+- 在命令行输出中明确提示“旧任务名已统一到新入口”，减少误解。
+
+#### 3. 变更记录与防回归
+- 在变更日志中补充本次事故记录，明确说明“训练脚本参数变更时，必须同步检查 `run.py` 包装层的声明、转发与帮助文案”。
+
+### 影响
+
+- `docs/QUICKSTART.md` 等文档中的 `--num-bag-folds` 示例现在与实际行为重新一致。
+- 服务端可继续通过 `uv run python scripts/run.py train_ohab --daemon --num-bag-folds 5 ...` 启动训练。
+- 旧的 `train_ohab_oot` / `train_arrive_oot` 调用不会再因为脚本缺失而直接失败。
+
+### 修改文件清单
+
+| 文件 | 修改内容 |
+|------|----------|
+| `scripts/run.py` | 补充 `--num-bag-folds` 参数声明与转发，增加旧任务名兼容映射 |
+| `CHANGELOG.md` | 记录本次包装器参数遗漏的根因、修复与防回归要求 |
+
+---
+
 ## [2026-03-24] 智能自适应数据切分与防泄漏闭环设计
 
 ### 背景
