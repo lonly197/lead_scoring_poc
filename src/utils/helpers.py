@@ -230,6 +230,30 @@ def update_process_status(task_name: str, pid: int, status: str, **kwargs: Any) 
         save_json(info, str(info_path))
 
 
+def complete_process_if_running(task_name: str, pid: int, **kwargs: Any) -> None:
+    """
+    仅在进程仍处于 running 状态时，将其标记为 completed。
+
+    用于 atexit 收口，避免失败/停止状态被错误覆盖。
+
+    Args:
+        task_name: 任务名称
+        pid: 进程 ID
+        **kwargs: 其他要更新的字段
+    """
+    info_path = PROCESS_DIR / f"{task_name}_{pid}.json"
+    if not info_path.exists():
+        return
+
+    try:
+        info = load_json(str(info_path))
+    except Exception:
+        return
+
+    if info.get("status") == "running":
+        update_process_status(task_name, pid, "completed", **kwargs)
+
+
 def list_running_processes() -> list[Dict[str, Any]]:
     """
     列出所有运行中的进程

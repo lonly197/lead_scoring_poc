@@ -26,6 +26,7 @@ from src.data.loader import DataLoader, FeatureEngineer, smart_split_data, split
 from src.models.predictor import LeadScoringPredictor
 from src.utils.helpers import (
     check_disk_space,
+    complete_process_if_running,
     get_preset_disk_requirement,
     get_timestamp,
     save_process_info,
@@ -131,7 +132,7 @@ def main():
         output_dir=str(output_dir),
     )
 
-    atexit.register(update_process_status, TASK_NAME, os.getpid(), "completed")
+    atexit.register(complete_process_if_running, TASK_NAME, os.getpid())
 
     logger.info("=" * 60)
     logger.info("OHAB 评级模型训练 (统一自适应版)")

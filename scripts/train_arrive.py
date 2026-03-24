@@ -34,6 +34,7 @@ from src.evaluation.metrics import (
 from src.models.predictor import LeadScoringPredictor
 from src.utils.helpers import (
     check_disk_space,
+    complete_process_if_running,
     get_preset_disk_requirement,
     get_timestamp,
     save_process_info,
@@ -139,7 +140,7 @@ def main():
         output_dir=str(output_dir),
     )
 
-    atexit.register(update_process_status, TASK_NAME, os.getpid(), "completed")
+    atexit.register(complete_process_if_running, TASK_NAME, os.getpid())
 
     logger.info("=" * 60)
     logger.info("到店预测模型训练 (统一自适应版)")

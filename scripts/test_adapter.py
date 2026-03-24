@@ -103,7 +103,7 @@ def test_data_loader():
         print(f"跳过: 文件不存在 {new_data_path}")
         return
 
-    loader = DataLoader(str(new_data_path))
+    loader = DataLoader(str(new_data_path), auto_adapt=True)
     df = loader.load()
 
     data_format = loader.get_data_format()

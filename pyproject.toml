@@ -9,11 +9,12 @@ authors = [
     { name = "Lead Scoring Team" }
 ]
 dependencies = [
-    "autogluon>=1.2.0",
+    "autogluon-tabular[lightgbm,catboost,xgboost]>=1.2.0",
     "pandas>=2.0.0",
     "numpy>=1.24.0",
     "python-dotenv>=1.0.0",
     "pyarrow>=14.0.0",
+    "ray>=2.38.0",
     "scikit-learn>=1.3.0",
     "matplotlib>=3.7.0",
     "seaborn>=0.12.0",
@@ -37,6 +38,10 @@ packages = ["src"]
 extra-index-url = [
     "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple",
     "https://mirrors.aliyun.com/pypi/simple/",
+]
+required-environments = [
+    "sys_platform == 'darwin' and platform_machine == 'x86_64'",
+    "sys_platform == 'darwin' and platform_machine == 'arm64'",
 ]
 
 [tool.ruff]

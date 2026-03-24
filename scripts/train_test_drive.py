@@ -28,6 +28,7 @@ from src.models.predictor import LeadScoringPredictor
 from src.utils.helpers import (
     check_data_quality,
     check_disk_space,
+    complete_process_if_running,
     get_preset_disk_requirement,
     get_timestamp,
     save_process_info,
@@ -74,6 +75,12 @@ def parse_args():
         type=str,
         default=None,
         help="输出目录",
+    )
+    parser.add_argument(
+        "--test-size",
+        type=float,
+        default=0.2,
+        help="测试集比例",
     )
     parser.add_argument(
         "--log-dir",
@@ -124,7 +131,7 @@ def main():
     )
 
     # 注册退出处理
-    atexit.register(update_process_status, TASK_NAME, os.getpid(), "completed")
+    atexit.register(complete_process_if_running, TASK_NAME, os.getpid())
 
     # 启动信息
     logger.info("=" * 60)
@@ -147,7 +154,7 @@ def main():
     try:
         # 1. 加载数据
         logger.info("步骤 1/6: 加载数据")
-        loader = DataLoader(data_path)
+        loader = DataLoader(data_path, auto_adapt=True)
         df = loader.load()
         quality = check_data_quality(df)
         logger.info(f"数据: {quality['total_rows']} 行, {quality['total_columns']} 列")
@@ -171,7 +178,10 @@ def main():
         # 3. 数据划分
         logger.info("步骤 3/6: 数据划分")
         train_df, test_df = split_data(
-            df_processed, target_label=target_label, test_size=0.2, stratify=True
+            df_processed,
+            target_label=target_label,
+            test_size=args.test_size,
+            stratify=True,
         )
         logger.info(f"训练集: {len(train_df)}, 测试集: {len(test_df)}")
 

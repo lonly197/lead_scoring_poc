@@ -10,7 +10,7 @@ uv sync
 
 # 训练模型（核心任务）
 uv run python scripts/train_arrive.py --data-path ./data/your_data.csv
-uv run python scripts/train_arrive_oot.py --data-path ./data/202603.tsv  # OOT 验证
+uv run python scripts/run.py train_arrive_oot --data-path ./data/202603.tsv  # OOT 验证（兼容任务名）
 
 # 后台运行长时间训练
 uv run python scripts/run.py train_arrive --daemon
@@ -32,12 +32,12 @@ uv run python scripts/generate_topk.py --model-path ./outputs/models/arrive_mode
 ### 训练脚本优先级
 
 ```
-train_arrive.py / train_arrive_oot.py  → 核心任务（到店预测）
-train_ohab.py / train_ohab_oot.py      → 辅助任务（OHAB 评级）
-train_test_drive.py                    → 辅助任务（试驾预测）
+train_arrive.py      → 核心任务（到店预测）
+train_ohab.py        → 辅助任务（OHAB 评级）
+train_test_drive.py  → 辅助任务（试驾预测）
 ```
 
-五个脚本完全独立，无依赖关系，可并行运行。
+仓库中实际存在 3 个训练脚本；另有 `train_arrive_oot` / `train_ohab_oot` 两个兼容任务名，通过 `scripts/run.py` 转发到统一训练入口。
 
 ### 数据格式适配
 

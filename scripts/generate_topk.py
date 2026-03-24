@@ -84,7 +84,7 @@ def main():
 
     # 2. 加载数据
     print_separator("加载数据")
-    loader = DataLoader(str(data_path))
+    loader = DataLoader(str(data_path), auto_adapt=True)
     df = loader.load()
     logger.info(f"数据量: {len(df)} 行")
 

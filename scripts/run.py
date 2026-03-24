@@ -22,6 +22,7 @@ TASK_SCRIPT_ALIASES = {
     "train_arrive_oot": "train_arrive",
     "train_ohab_oot": "train_ohab",
 }
+TEST_SIZE_SUPPORTED_TASKS = {"train_test_drive"}
 
 
 def run_background(script_path: str, args: list[str], log_dir: str = "./outputs/logs") -> int:
@@ -183,6 +184,15 @@ def main():
     if resolved_task != args.task:
         print(f"提示: 任务 {args.task} 已统一到 {resolved_task}，自动转发。")
 
+    if args.test_size is not None:
+        if resolved_task not in TEST_SIZE_SUPPORTED_TASKS:
+            parser.error(
+                "--test-size 仅适用于 train_test_drive；"
+                "train_arrive 和 train_ohab 使用智能/OOT 切分，不支持该参数"
+            )
+        if not 0 < args.test_size < 1:
+            parser.error("--test-size 必须在 0 和 1 之间")
+
     # 确定脚本路径
     script_path = Path(__file__).parent / f"{resolved_task}.py"
     if not script_path.exists():
@@ -201,7 +211,7 @@ def main():
         pass_args.extend(["--time-limit", str(args.time_limit)])
     if args.num_bag_folds is not None:
         pass_args.extend(["--num-bag-folds", str(args.num_bag_folds)])
-    if args.test_size:
+    if args.test_size is not None and resolved_task in TEST_SIZE_SUPPORTED_TASKS:
         pass_args.extend(["--test-size", str(args.test_size)])
     if args.output_dir:
         pass_args.extend(["--output-dir", args.output_dir])

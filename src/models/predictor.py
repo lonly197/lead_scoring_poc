@@ -51,6 +51,77 @@ class LeadScoringPredictor:
 
         self._predictor = None
         self._feature_metadata = None
+        self._feature_columns: Optional[List[str]] = None
+
+    @staticmethod
+    def _format_column_preview(columns: List[str], limit: int = 5) -> str:
+        """格式化列名预览。"""
+        preview = columns[:limit]
+        suffix = "..." if len(columns) > limit else ""
+        return ", ".join(preview) + suffix
+
+    def _align_frame_to_features(
+        self,
+        data: pd.DataFrame,
+        dataset_name: str,
+        feature_columns: List[str],
+        include_label: bool,
+    ) -> pd.DataFrame:
+        """
+        将数据对齐到指定特征列集合。
+
+        Args:
+            data: 待对齐数据
+            dataset_name: 数据集名称，用于日志和报错
+            feature_columns: 训练期特征列顺序
+            include_label: 是否要求并保留目标列
+
+        Returns:
+            对齐后的 DataFrame
+        """
+        missing_features = [col for col in feature_columns if col not in data.columns]
+        if missing_features:
+            preview = self._format_column_preview(missing_features)
+            raise ValueError(
+                f"{dataset_name} 缺少 {len(missing_features)} 个训练特征列: {preview}"
+            )
+
+        ordered_columns = feature_columns.copy()
+        if include_label:
+            if self.label not in data.columns:
+                raise ValueError(f"{dataset_name} 缺少目标列: {self.label}")
+            ordered_columns.append(self.label)
+
+        allowed_columns = set(ordered_columns)
+        extra_columns = [col for col in data.columns if col not in allowed_columns]
+        if extra_columns:
+            logger.info(
+                f"{dataset_name} 丢弃 {len(extra_columns)} 个额外列: "
+                f"{self._format_column_preview(extra_columns)}"
+            )
+
+        return data.loc[:, ordered_columns].copy()
+
+    def _require_feature_columns(self) -> List[str]:
+        """确保模型已记录训练特征列。"""
+        if not self._feature_columns:
+            raise ValueError("模型未记录训练特征列，请重新训练或加载包含 metadata 的模型")
+        return self._feature_columns
+
+    def _prepare_inference_data(
+        self,
+        data: pd.DataFrame,
+        dataset_name: str,
+        include_label: bool = False,
+    ) -> pd.DataFrame:
+        """基于训练期特征列对齐推理/评估数据。"""
+        feature_columns = self._require_feature_columns()
+        return self._align_frame_to_features(
+            data=data,
+            dataset_name=dataset_name,
+            feature_columns=feature_columns,
+            include_label=include_label,
+        )
 
     def train(
         self,
@@ -81,14 +152,23 @@ class LeadScoringPredictor:
         # 创建输出目录
         self.output_path.mkdir(parents=True, exist_ok=True)
 
-        # 排除指定列（在传入 AutoGluon 前处理）
-        if excluded_columns:
-            cols_to_drop = [col for col in excluded_columns if col in train_data.columns]
-            if cols_to_drop:
-                train_data = train_data.drop(columns=cols_to_drop)
-                logger.info(f"排除 {len(cols_to_drop)} 列: {cols_to_drop[:5]}{'...' if len(cols_to_drop) > 5 else ''}")
+        if self.label not in train_data.columns:
+            raise ValueError(f"train_data 缺少目标列: {self.label}")
 
-        logger.info(f"实际特征数量: {len(train_data.columns) - 1}")  # 减去目标列
+        # 统一确定训练期特征列集合，并对训练/验证数据执行同一套对齐。
+        excluded_set = set(excluded_columns or [])
+        self._feature_columns = [
+            col for col in train_data.columns
+            if col not in excluded_set and col != self.label
+        ]
+        train_data = self._align_frame_to_features(
+            data=train_data,
+            dataset_name="train_data",
+            feature_columns=self._feature_columns,
+            include_label=True,
+        )
+
+        logger.info(f"最终训练特征数: {len(self._feature_columns)}")
 
         # 初始化 predictor（包含样本权重配置）
         init_kwargs = {
@@ -112,6 +192,24 @@ class LeadScoringPredictor:
             **kwargs,
         }
 
+        for dataset_name, include_label in (
+            ("tuning_data", True),
+            ("test_data", True),
+            ("unlabeled_data", False),
+        ):
+            dataset = fit_kwargs.get(dataset_name)
+            if isinstance(dataset, pd.DataFrame):
+                fit_kwargs[dataset_name] = self._align_frame_to_features(
+                    data=dataset,
+                    dataset_name=dataset_name,
+                    feature_columns=self._feature_columns,
+                    include_label=include_label,
+                )
+                logger.info(
+                    f"{dataset_name} 对齐后特征数: "
+                    f"{len(fit_kwargs[dataset_name].columns) - (1 if include_label else 0)}"
+                )
+
         # 训练
         self._predictor.fit(train_data, **fit_kwargs)
 
@@ -132,7 +230,12 @@ class LeadScoringPredictor:
         if self._predictor is None:
             raise ValueError("模型未训练，请先调用 train() 或 load()")
 
-        return self._predictor.predict(data)
+        aligned_data = self._prepare_inference_data(
+            data=data,
+            dataset_name="predict_data",
+            include_label=False,
+        )
+        return self._predictor.predict(aligned_data)
 
     def predict_proba(self, data: pd.DataFrame) -> pd.DataFrame:
         """
@@ -147,7 +250,12 @@ class LeadScoringPredictor:
         if self._predictor is None:
             raise ValueError("模型未训练，请先调用 train() 或 load()")
 
-        return self._predictor.predict_proba(data)
+        aligned_data = self._prepare_inference_data(
+            data=data,
+            dataset_name="predict_data",
+            include_label=False,
+        )
+        return self._predictor.predict_proba(aligned_data)
 
     def get_positive_proba(self, data: pd.DataFrame) -> np.ndarray:
         """
@@ -186,13 +294,18 @@ class LeadScoringPredictor:
             raise ValueError("模型未训练，请先调用 train() 或 load()")
 
         logger.info("评估模型...")
+        aligned_test_data = self._prepare_inference_data(
+            data=test_data,
+            dataset_name="test_data",
+            include_label=True,
+        )
 
         # 使用 AutoGluon 内置评估
-        eval_result = self._predictor.evaluate(test_data, silent=True)
+        eval_result = self._predictor.evaluate(aligned_test_data, silent=True)
 
         # 计算额外指标
-        y_true = test_data[self.label].values
-        y_pred = self.predict(test_data)
+        y_true = aligned_test_data[self.label].values
+        y_pred = self.predict(aligned_test_data)
 
         from sklearn.metrics import (
             accuracy_score,
@@ -207,7 +320,7 @@ class LeadScoringPredictor:
         try:
             # 二分类指标
             if self.problem_type != "multiclass":
-                y_proba = self.get_positive_proba(test_data)
+                y_proba = self.get_positive_proba(aligned_test_data)
 
                 extra_metrics["roc_auc"] = roc_auc_score(y_true, y_proba)
                 extra_metrics["precision"] = precision_score(
@@ -269,8 +382,13 @@ class LeadScoringPredictor:
             raise ValueError("模型未训练，请先调用 train() 或 load()")
 
         logger.info("计算特征重要性...")
+        aligned_test_data = self._prepare_inference_data(
+            data=test_data,
+            dataset_name="test_data",
+            include_label=True,
+        )
 
-        importance = self._predictor.feature_importance(test_data)
+        importance = self._predictor.feature_importance(aligned_test_data)
 
         # 转换为 DataFrame
         importance_df = pd.DataFrame({
@@ -297,6 +415,7 @@ class LeadScoringPredictor:
             "output_path": str(save_path),
             "sample_weight": self.sample_weight,
             "weight_evaluation": self.weight_evaluation,
+            "feature_columns": self._feature_columns or [],
         }
 
         metadata_path = save_path / "metadata.json"
@@ -332,6 +451,12 @@ class LeadScoringPredictor:
         # 加载 AutoGluon predictor（跳过版本检查以避免兼容性问题）
         predictor = TabularPredictor.load(str(load_path), require_version_match=False)
 
+        feature_columns = metadata.get("feature_columns")
+        if not feature_columns:
+            feature_metadata = getattr(predictor, "feature_metadata_in", None)
+            if feature_metadata is not None and hasattr(feature_metadata, "get_features"):
+                feature_columns = list(feature_metadata.get_features())
+
         # 创建实例
         instance = cls(
             label=metadata.get("label", predictor.label),
@@ -342,10 +467,13 @@ class LeadScoringPredictor:
             weight_evaluation=metadata.get("weight_evaluation", False),
         )
         instance._predictor = predictor
+        instance._feature_columns = feature_columns or None
 
         logger.info(f"模型已加载: {load_path}")
         if instance.sample_weight:
             logger.info(f"样本权重配置: {instance.sample_weight}")
+        if instance._feature_columns:
+            logger.info(f"已恢复 {len(instance._feature_columns)} 个训练特征列")
 
         return instance
 
@@ -366,6 +494,7 @@ class LeadScoringPredictor:
             "output_path": str(self.output_path),
             "sample_weight": self.sample_weight,
             "weight_evaluation": self.weight_evaluation,
+            "feature_count": len(self._feature_columns or []),
             "model_types": list(self._predictor.model_names()),
             "best_model": self._predictor.model_best,
         }
