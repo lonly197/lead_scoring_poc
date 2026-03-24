@@ -385,6 +385,40 @@ def main():
         f.write("-" * 40 + "\n")
         f.write(report)
 
+        # === 追加业务转化漏斗验证 (终态 O 验证) ===
+        if "is_final_ordered" in df_processed.columns:
+            f.write("\n\n" + "=" * 60 + "\n")
+            f.write("🎯 业务转化效果验证 (AI 评级 vs 最终下定)\n")
+            f.write("=" * 60 + "\n")
+            f.write("模型预测出的各级别线索中，最终实际下定 (O级) 的转化率对比：\n\n")
+            
+            print("\n" + "=" * 60)
+            print("🎯 业务转化效果验证 (AI 评级 vs 最终下定)")
+            print("=" * 60)
+            
+            # 使用预测标签和实际隔离标签做聚合
+            final_df = pd.DataFrame({
+                "predicted_level": y_pred,
+                "is_ordered": df_processed["is_final_ordered"].values
+            })
+            
+            # 按 H, A, B 的顺序输出
+            for level in ["H", "A", "B"]:
+                subset = final_df[final_df["predicted_level"] == level]
+                count_total = len(subset)
+                if count_total > 0:
+                    count_ordered = subset["is_ordered"].sum()
+                    conversion_rate = count_ordered / count_total
+                    
+                    report_chunk = (
+                        f"【AI 预测为 {level} 级 的线索】\n"
+                        f"- 命中人数: {count_total} 人\n"
+                        f"- 实际下定人数: {count_ordered} 人\n"
+                        f"- 下定转化率: {conversion_rate:.2%}\n\n"
+                    )
+                    f.write(report_chunk)
+                    print(report_chunk.strip())
+
     logger.info(f"评估报告已保存: {report_path}")
 
     # 打印总结

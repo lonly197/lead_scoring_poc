@@ -168,11 +168,20 @@ def calculate_target_labels(df: pd.DataFrame) -> pd.DataFrame:
     if "线索评级结果" in df.columns and "线索评级_试驾前" not in df.columns:
         df["线索评级_试驾前"] = df["线索评级结果"].fillna("Unknown")
 
+    # === O 级合并逻辑 ===
+    # 将 O 级强制归并为 H 级（仅针对模型训练的评级字段），以提升高优样本浓度并避免分类不平衡
+    if "线索评级_试驾前" in df.columns:
+        df["线索评级_试驾前"] = df["线索评级_试驾前"].replace({"O": "H"})
+
     # 成交标签（如果有下订时间）
     if "下订时间" in df.columns:
         df["成交标签"] = df["下订时间"].notna().astype(int)
+        # === 终态验证隔离列 ===
+        # 绝不用于训练，仅供 validate_model.py 验证最终转化率使用
+        df["is_final_ordered"] = df["下订时间"].notna().astype(int)
     else:
         df["成交标签"] = 0
+        df["is_final_ordered"] = 0
 
     return df
 
