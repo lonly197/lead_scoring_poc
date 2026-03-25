@@ -218,7 +218,7 @@ AutoGluon 1.5 在 bagging 模式下不允许直接使用 `tuning_data` 作为验
 |------------|----------|------|
 | 300 (5分钟) | `medium_quality` | 快速验证、调试流程 |
 | 1800 (30分钟) | `good_quality` | 初步评估模型效果 |
-| 3600 (1小时) | `high_quality` | 生产级模型（默认值） |
+| 3600 (1小时) | `good_quality` 或 `high_quality` | 16GB OHAB 建议继续用 `good_quality`，更大机器再考虑 `high_quality` |
 | 7200+ (2小时+) | `best_quality` | 追求极致性能 |
 
 **重要**：时间应与预设匹配，过短时间配合高质量预设会导致模型训练不充分。

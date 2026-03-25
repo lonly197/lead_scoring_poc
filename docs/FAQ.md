@@ -108,15 +108,15 @@ print(f"OHAB分布: {df['线索评级_试驾前'].value_counts().to_dict()}")
 
 ### Q: 训练需要多长时间？
 
-使用 `high_quality` 预设，约 1 小时（7.3万条数据）。可通过 `--time-limit` 调整。
+对通用小中型任务，`high_quality` 通常约 1 小时（7.3 万条数据）。但对当前 16GB 服务器上的 OHAB 训练，不建议默认使用 `high_quality`，而应优先使用 `server_16g_compare`（`good_quality + 3 folds`）。
 
 ### Q: 如何选择预设？
 
 | 预设 | 磁盘需求 | 训练时间 | 精度 | 适用场景 |
 |------|----------|----------|------|----------|
 | `medium_quality` | ~1G | ~15分钟 | 中等 | 快速验证、磁盘紧张 |
-| `good_quality` | ~2G | ~30分钟 | 良好 | 平衡方案 |
-| `high_quality` | ~4G | ~1小时 | 高 | **推荐，生产使用** |
+| `good_quality` | ~2G | ~30分钟 | 良好 | 16GB 服务器上的 OHAB 正式推荐档基础 |
+| `high_quality` | ~4G | ~1小时 | 高 | 更大机器或更长时限下再使用 |
 | `best_quality` | ~8G | ~4小时 | 最高 | 最终优化 |
 
 ### Q: 如何处理类别不平衡问题？
@@ -282,7 +282,7 @@ git pull
 |------------|----------|----------|
 | 600 | `medium_quality` | 快速验证 |
 | 1800 | `good_quality` | 初步评估 |
-| 3600 | `high_quality` | 生产使用（默认） |
+| 3600 | `good_quality` 或 `high_quality` | 按机器资源选择，16GB OHAB 不建议直接切 `high_quality` |
 
 **重要**：时间应与预设匹配。详见 [训练脚本说明](./TRAINING.md#--time-limit-参数详解)。
 

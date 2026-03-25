@@ -21,9 +21,9 @@ TRAINING_PROFILES: dict[str, dict[str, Any]] = {
         "enable_model_comparison": True,
         "baseline_family": "gbm",
         "memory_limit_gb": None,  # 自动根据可用内存计算
-        "fit_strategy": "parallel",  # 启用模型级并行
+        "fit_strategy": "sequential",
         "excluded_model_types": DEFAULT_MEMORY_HEAVY_MODELS,
-        "num_folds_parallel": None,  # 自动计算
+        "num_folds_parallel": 1,
         "max_memory_ratio": 0.7,  # 单模型内存上限
     },
     "server_16g_fast": {
@@ -34,9 +34,22 @@ TRAINING_PROFILES: dict[str, dict[str, Any]] = {
         "enable_model_comparison": False,
         "baseline_family": "gbm",
         "memory_limit_gb": None,
-        "fit_strategy": "parallel",
+        "fit_strategy": "sequential",
         "excluded_model_types": DEFAULT_MEMORY_HEAVY_MODELS,
-        "num_folds_parallel": None,
+        "num_folds_parallel": 1,
+        "max_memory_ratio": 0.7,
+    },
+    "server_16g_probe_nn_torch": {
+        "preset": "good_quality",
+        "time_limit": 7200,
+        "num_bag_folds": 0,
+        "label_mode": "hab",
+        "enable_model_comparison": False,
+        "baseline_family": "gbm",
+        "memory_limit_gb": None,
+        "fit_strategy": "sequential",
+        "excluded_model_types": ["RF", "XT", "KNN", "FASTAI"],
+        "num_folds_parallel": 1,
         "max_memory_ratio": 0.7,
     },
     "lab_full_quality": {

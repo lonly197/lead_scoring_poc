@@ -76,6 +76,16 @@ uv run python scripts/run.py train_ohab --daemon \
     --valid-end 2026-03-20
 ```
 
+该档位的默认取舍是：
+
+- 使用 `good_quality`
+- 保留 `LightGBM / CatBoost / XGBoost + WeightedEnsemble`
+- 默认排除 `RF/XT/KNN/FASTAI/NN_TORCH`
+- 固定 `fit_strategy=sequential`
+- 固定 `num_folds_parallel=1`
+
+这套组合针对当前 16GB / 8 核 / CPU-only 服务器做过收敛，优先保证训练稳定性和基线对比可复现性，不建议直接切到 `high_quality`。
+
 ### 资源自适应控制
 
 内存控制参数现在支持**所有**训练任务（train_arrive, train_ohab, train_test_drive），帮助在资源受限的环境下稳定运行：
@@ -83,6 +93,20 @@ uv run python scripts/run.py train_ohab --daemon \
 - `--max-memory-ratio`: 最大内存使用比例（默认 0.8，建议 0.6-0.8）
 - `--exclude-memory-heavy-models`: 排除内存密集型模型（KNN, RF, XT）
 - `--num-folds-parallel`: 限制并行训练的 fold 数量
+
+### 16GB 服务器上的受控实验档
+
+如果只想验证神经网络模型是否有增益，不要直接把 `FASTAI` 和所有非树模型一起放开。推荐使用单变量实验档：
+
+```bash
+uv run python scripts/run.py train_ohab --daemon \
+    --data-path ./data/202602~03.tsv \
+    --training-profile server_16g_probe_nn_torch \
+    --train-end 2026-03-15 \
+    --valid-end 2026-03-20
+```
+
+该档位只恢复 `NN_TORCH`，保持 `FASTAI/RF/XT` 继续排除，并关闭 bagging。若 `balanced_accuracy` 或 `macro_f1` 没有稳定提升，不建议在当前机器上继续扩展模型池。
 
 ---
 

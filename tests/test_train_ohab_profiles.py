@@ -50,7 +50,7 @@ def test_resolve_training_config_uses_server_16g_compare_defaults(monkeypatch):
     assert resolved["num_bag_folds"] == 3
     assert resolved["enable_model_comparison"] is True
     assert resolved["baseline_family"] == "gbm"
-    assert resolved["memory_limit_gb"] == 12.0
+    assert resolved["memory_limit_gb"] == 8.0
     assert resolved["fit_strategy"] == "sequential"
     assert resolved["num_folds_parallel"] == 1
     assert resolved["excluded_model_types"] == ["RF", "XT", "KNN", "FASTAI", "NN_TORCH"]
@@ -103,6 +103,27 @@ def test_resolve_training_config_auto_tunes_memory_limit_from_available_memory(m
 
     resolved = resolve_training_config(_make_args())
 
-    assert resolved["memory_limit_gb"] == 9.0
+    assert resolved["memory_limit_gb"] == 6.5
     assert resolved["num_folds_parallel"] == 1
-    assert resolved["resource_tuning"]["derived_memory_limit_gb"] == 9.0
+    assert resolved["resource_tuning"]["derived_memory_limit_gb"] == 6.5
+
+
+def test_resolve_training_config_probe_profile_restores_only_nn_torch(monkeypatch):
+    monkeypatch.delenv("OHAB_MEMORY_LIMIT_GB", raising=False)
+    monkeypatch.delenv("OHAB_NUM_FOLDS_PARALLEL", raising=False)
+    monkeypatch.setattr(
+        ohab_runtime,
+        "detect_system_resources",
+        lambda: {"cpu_count": 8, "total_memory_gb": 15.45, "available_memory_gb": 10.96},
+    )
+
+    resolved = resolve_training_config(_make_args(training_profile="server_16g_probe_nn_torch"))
+
+    assert resolved["training_profile"] == "server_16g_probe_nn_torch"
+    assert resolved["preset"] == "good_quality"
+    assert resolved["time_limit"] == 7200
+    assert resolved["num_bag_folds"] == 0
+    assert resolved["enable_model_comparison"] is False
+    assert resolved["fit_strategy"] == "sequential"
+    assert resolved["num_folds_parallel"] == 1
+    assert resolved["excluded_model_types"] == ["RF", "XT", "KNN", "FASTAI"]

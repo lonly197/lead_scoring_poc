@@ -259,8 +259,8 @@ def parse_args():
         "--training-profile",
         type=str,
         default=None,
-        choices=["server_16g_compare", "server_16g_fast", "lab_full_quality"],
-        help="训练档位：server_16g_compare 为 16GB 服务器推荐档",
+        choices=["server_16g_compare", "server_16g_fast", "server_16g_probe_nn_torch", "lab_full_quality"],
+        help="训练档位：server_16g_compare 为 16GB 服务器正式推荐档，server_16g_probe_nn_torch 仅用于 NN_TORCH 单变量实验",
     )
     parser.add_argument(
         "--memory-limit-gb",

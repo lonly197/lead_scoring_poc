@@ -96,8 +96,8 @@ uv run python scripts/run.py train_ohab --daemon \
 **为什么推荐 `server_16g_compare`**：
 
 - 适配 16GB 内存服务器，默认使用 `good_quality + 3 folds`
-- 启动前会自动探测当前 CPU 和可用内存，并自动收敛内存上限与折并行度
-- 在 16GB 服务器上，通常会自动把折并行度收敛到 `1`，避免 Ray 同时拉起 5 折训练占满内存
+- 启动前会自动探测当前 CPU 和可用内存，并自动收敛内存上限
+- 在 16GB 服务器上，默认固定使用 `sequential + num_folds_parallel=1`，避免模型级并行或多折并行把内存打满
 - 默认排除 `RF/XT/KNN/FASTAI/NN_TORCH` 等高内存模型
 - 保留 `gbm` 基线模型和 AutoGluon 最优模型的对比产物，适合客户汇报
 
@@ -107,11 +107,23 @@ uv run python scripts/run.py train_ohab --daemon \
 uv run python scripts/run.py train_ohab --daemon \
     --data-path ./data/202602~03.tsv \
     --training-profile server_16g_compare \
-    --memory-limit-gb 10 \
+    --memory-limit-gb 8.5 \
     --num-folds-parallel 1 \
     --train-end 2026-03-15 \
     --valid-end 2026-03-20
 ```
+
+**如果只想验证 `NN_TORCH` 是否有增益**：
+
+```bash
+uv run python scripts/run.py train_ohab --daemon \
+    --data-path ./data/202602~03.tsv \
+    --training-profile server_16g_probe_nn_torch \
+    --train-end 2026-03-15 \
+    --valid-end 2026-03-20
+```
+
+这个实验档只恢复 `NN_TORCH`，继续排除 `FASTAI/RF/XT`，并关闭 bagging，适合做单变量对比；未验证出显著收益前，不建议把它升级为正式默认档。
 
 **如果在更大机器上追求更高精度**：
 

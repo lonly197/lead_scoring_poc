@@ -27,7 +27,8 @@ OHAB_NUM_BAG_FOLDS=3
 OHAB_LABEL_MODE=hab
 OHAB_ENABLE_MODEL_COMPARISON=true
 OHAB_BASELINE_FAMILY=gbm
-OHAB_MEMORY_LIMIT_GB=12
+# 建议留空，交给 train_ohab.py 按当前可用内存自动推导；如需固定，建议 8.5-9
+OHAB_MEMORY_LIMIT_GB=
 OHAB_FIT_STRATEGY=sequential
 OHAB_EXCLUDED_MODEL_TYPES=RF,XT,KNN,FASTAI,NN_TORCH
 OHAB_NUM_FOLDS_PARALLEL=1
@@ -84,7 +85,7 @@ OUTPUT_DIR=./outputs
 
 ### HAB/OHAB 训练专用配置
 
-`train_ohab.py` 会优先读取 `OHAB_*` 环境变量。推荐把 16GB 服务器默认档直接写入 `.env`，避免团队继续误用高资源配置。
+`train_ohab.py` 会优先读取 `OHAB_*` 环境变量。推荐把 16GB 服务器默认档直接写入 `.env`，避免团队继续误用通用 `MODEL_PRESET/TIME_LIMIT` 的高资源口径。对 OHAB 训练而言，`--training-profile` / `OHAB_*` 的优先级高于通用模型变量。
 
 | 环境变量 | 说明 | 推荐值 |
 |----------|------|--------|
@@ -95,10 +96,10 @@ OUTPUT_DIR=./outputs
 | `OHAB_LABEL_MODE` | 评级模式 | `hab` |
 | `OHAB_ENABLE_MODEL_COMPARISON` | 是否保留基线模型对比 | `true` |
 | `OHAB_BASELINE_FAMILY` | 基线模型家族 | `gbm` |
-| `OHAB_MEMORY_LIMIT_GB` | 训练内存上限 | 可留空，默认自动探测 |
+| `OHAB_MEMORY_LIMIT_GB` | 训练内存上限 | 建议留空自动探测；如需固定，建议 `8.5-9` |
 | `OHAB_FIT_STRATEGY` | 模型训练策略 | `sequential` |
 | `OHAB_EXCLUDED_MODEL_TYPES` | 排除的高内存模型 | `RF,XT,KNN,FASTAI,NN_TORCH` |
-| `OHAB_NUM_FOLDS_PARALLEL` | 并行折数 | 可留空，默认自动探测 |
+| `OHAB_NUM_FOLDS_PARALLEL` | 并行折数 | `1` |
 
 ### 内置训练档位
 
@@ -106,6 +107,7 @@ OUTPUT_DIR=./outputs
 |------|----------|----------|
 | `server_16g_compare` | 16GB 服务器正式推荐档 | `good_quality + 3 folds + baseline 对比` |
 | `server_16g_fast` | 快速验证流程 | `medium_quality + 0 folds` |
+| `server_16g_probe_nn_torch` | 16GB 服务器受控实验档 | `good_quality + 0 folds + 仅恢复 NN_TORCH` |
 | `lab_full_quality` | 更大机器的高质量训练 | `high_quality + 5 folds` |
 
 ### 资源参数自动探测
@@ -122,4 +124,4 @@ OUTPUT_DIR=./outputs
 - 普通场景优先自动探测
 - 高级场景再用命令行显式覆盖
 
-也就是说，`OHAB_MEMORY_LIMIT_GB` 和 `OHAB_NUM_FOLDS_PARALLEL` 现在更适合作为“固定覆盖项”，而不是必须填写的基础配置。
+也就是说，`OHAB_MEMORY_LIMIT_GB` 更适合作为“按需覆盖项”，而不是必须填写的基础配置；`OHAB_NUM_FOLDS_PARALLEL` 对 16GB 服务器建议固定为 `1`。
