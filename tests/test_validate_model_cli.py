@@ -71,6 +71,7 @@ def load_validate_script(monkeypatch):
     ohab_metrics_module = types.ModuleType("src.evaluation.ohab_metrics")
     ohab_metrics_module.apply_hab_decision_policy = lambda y_proba, policy: y_proba
     ohab_metrics_module.classification_report_dict = lambda y_true, y_pred: {}
+    ohab_metrics_module.classification_report_text = lambda y_true, y_pred: ""
     ohab_metrics_module.compute_hab_bucket_summary = lambda *args, **kwargs: DummyDataFrame()
     ohab_metrics_module.compute_class_ranking_report = lambda *args, **kwargs: {}
     ohab_metrics_module.compute_threshold_report = lambda *args, **kwargs: None
@@ -117,11 +118,12 @@ def test_validate_model_run_background_strips_daemon_and_appends_log_file(monkey
     class DummyProcess:
         pid = 43210
 
-    def fake_popen(cmd, stdout, stderr, start_new_session):
+    def fake_popen(cmd, stdout, stderr, start_new_session, env):
         captured["cmd"] = cmd
         captured["stdout_name"] = stdout.name
         captured["stderr"] = stderr
         captured["start_new_session"] = start_new_session
+        captured["env_flag"] = env.get("LEAD_SCORING_DISABLE_CONSOLE_LOG")
         return DummyProcess()
 
     monkeypatch.setattr(validate_script.subprocess, "Popen", fake_popen)
@@ -154,6 +156,7 @@ def test_validate_model_run_background_strips_daemon_and_appends_log_file(monkey
     assert captured["cmd"][-2:] == ["--log-file", "outputs/logs/validate_model_20260325_120000.log"]
     assert captured["stdout_name"].endswith("outputs/logs/validate_model_20260325_120000.log")
     assert captured["start_new_session"] is True
+    assert captured["env_flag"] == "1"
 
 
 def test_validate_model_main_uses_background_branch(monkeypatch):

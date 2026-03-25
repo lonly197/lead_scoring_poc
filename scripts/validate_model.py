@@ -34,6 +34,7 @@ from src.evaluation.business_logic import build_bucket_summary_text, build_lead_
 from src.evaluation.ohab_metrics import (
     apply_hab_decision_policy,
     classification_report_dict,
+    classification_report_text,
     compute_hab_bucket_summary,
     compute_class_ranking_report,
     compute_threshold_report,
@@ -227,6 +228,7 @@ def run_background(args: argparse.Namespace) -> int:
             stdout=f,
             stderr=subprocess.STDOUT,
             start_new_session=True,
+            env={**os.environ, "LEAD_SCORING_DISABLE_CONSOLE_LOG": "1"},
         )
 
     print(f"进程 ID: {process.pid}")
@@ -498,7 +500,6 @@ def main():
         from sklearn.metrics import (
             accuracy_score,
             balanced_accuracy_score,
-            classification_report,
             confusion_matrix,
             matthews_corrcoef,
         )
@@ -534,7 +535,7 @@ def main():
             balanced_acc = balanced_accuracy_score(y_true, y_pred)
             mcc = matthews_corrcoef(y_true, y_pred)
             cm = confusion_matrix(y_true, y_pred)
-            report = classification_report(y_true, y_pred)
+            report = classification_report_text(y_true, y_pred)
             confusion_df = confusion_matrix_frame(y_true, y_pred)
             classification_dict = classification_report_dict(y_true, y_pred)
             class_ranking_report = compute_class_ranking_report(y_true, y_proba, top_ratios=top_ratios)

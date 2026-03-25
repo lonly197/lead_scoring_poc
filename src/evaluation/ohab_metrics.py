@@ -10,6 +10,16 @@ from sklearn.metrics import balanced_accuracy_score, classification_report, conf
 from src.data.label_policy import ordered_hab_labels, ordered_ohab_labels
 
 
+def classification_report_text(y_true: Sequence[str], y_pred: Sequence[str]) -> str:
+    labels = ordered_ohab_labels(list(y_true) + list(y_pred))
+    return classification_report(
+        y_true,
+        y_pred,
+        labels=labels,
+        zero_division=0,
+    )
+
+
 def classification_report_dict(y_true: Sequence[str], y_pred: Sequence[str]) -> Dict[str, object]:
     labels = ordered_ohab_labels(list(y_true) + list(y_pred))
     return classification_report(
