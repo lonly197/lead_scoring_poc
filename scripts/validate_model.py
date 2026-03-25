@@ -8,10 +8,15 @@
 3. 生成详细报告
 """
 
+from __future__ import annotations
+
 import argparse
+import atexit
 import json
 import logging
+import os
 import pickle  # noqa: S403 - 加载 AutoGluon 模型需要
+import subprocess
 import sys
 from pathlib import Path
 
@@ -35,7 +40,15 @@ from src.evaluation.ohab_metrics import (
     confusion_matrix_frame,
     check_hab_monotonicity,
 )
-from src.utils.helpers import setup_logging
+from src.utils.helpers import (
+    complete_process_if_running,
+    get_timestamp,
+    get_local_now,
+    format_timestamp,
+    save_process_info,
+    setup_logging,
+    update_process_status,
+)
 
 
 def load_feature_metadata(model_path: Path) -> dict:
@@ -52,6 +65,7 @@ def dump_json(path: Path, payload: dict | list) -> None:
         json.dump(payload, f, ensure_ascii=False, indent=2, default=str)
 
 logger = logging.getLogger(__name__)
+TASK_NAME = "validate_model"
 FINAL_ORDERED_COLUMN = "is_final_ordered"
 ROLE_DISPLAY = {
     "baseline": "基线模型",
@@ -79,6 +93,17 @@ def run_model_predictions(
 def parse_args():
     parser = argparse.ArgumentParser(description="验证 OHAB 模型")
 
+    parser.add_argument(
+        "--daemon", "-d",
+        action="store_true",
+        help="后台运行模式",
+    )
+    parser.add_argument(
+        "--log-file",
+        type=str,
+        default=None,
+        help="日志文件路径",
+    )
     parser.add_argument(
         "--model-path",
         type=str,
@@ -128,6 +153,58 @@ def parse_args():
     )
 
     return parser.parse_args()
+
+
+def _strip_daemon_flags(argv: list[str]) -> list[str]:
+    daemon_flags = {"--daemon", "-d"}
+    stripped = []
+    skip_next = False
+    for arg in argv:
+        if skip_next:
+            skip_next = False
+            continue
+        if arg in daemon_flags:
+            continue
+        stripped.append(arg)
+    return stripped
+
+
+def run_background(args: argparse.Namespace) -> int:
+    """后台启动验证脚本。"""
+    log_dir = Path("./outputs/logs")
+    log_dir.mkdir(parents=True, exist_ok=True)
+
+    log_file = Path(args.log_file) if args.log_file else log_dir / f"{TASK_NAME}_{get_timestamp()}.log"
+
+    cmd = [sys.executable, __file__, *_strip_daemon_flags(sys.argv[1:])]
+    if args.log_file is None:
+        cmd.extend(["--log-file", str(log_file)])
+    cmd_str = " ".join(cmd)
+
+    print(f"启动后台任务: {TASK_NAME}")
+    print(f"日志文件: {log_file}")
+    print(f"命令: {cmd_str}")
+
+    start_time = get_local_now()
+    with open(log_file, "w", encoding="utf-8") as f:
+        f.write(f"启动时间: {format_timestamp(start_time)}\n")
+        f.write(f"命令: {cmd_str}\n")
+        f.write("=" * 60 + "\n\n")
+        f.flush()
+
+        process = subprocess.Popen(
+            cmd,
+            stdout=f,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+
+    print(f"进程 ID: {process.pid}")
+    print("\n查看状态: uv run python scripts/monitor.py status")
+    print(f"查看日志: uv run python scripts/monitor.py log {TASK_NAME}")
+    print(f"持续跟踪: tail -f {log_file}")
+
+    return process.pid
 
 
 def load_model(model_path: Path):
@@ -188,392 +265,421 @@ def find_available_model(default_path: Path) -> Path:
 
 def main():
     args = parse_args()
-    setup_logging(level=logging.INFO)
+    if args.daemon:
+        pid = run_background(args)
+        print(f"\n✅ 后台任务已启动 (PID: {pid})")
+        return
 
-    model_path = Path(args.model_path)
-    # 如果指定的模型路径不存在，尝试自动检测
-    if not model_path.exists():
-        detected_path = find_available_model(model_path)
-        if detected_path.exists():
-            logger.info(f"模型路径 {model_path} 不存在，使用检测到的模型: {detected_path}")
-            model_path = detected_path
-        else:
-            logger.error(f"未找到可用模型，请先运行训练脚本")
-            logger.error(f"  uv run python scripts/train_ohab.py")
-            sys.exit(1)
+    if args.log_file:
+        log_file = Path(args.log_file)
+    else:
+        log_dir = Path("./outputs/logs")
+        log_dir.mkdir(parents=True, exist_ok=True)
+        log_file = log_dir / f"{TASK_NAME}_{get_timestamp()}.log"
 
-    output_dir = Path(args.output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    top_ratios = tuple(float(item.strip()) / 100 for item in args.report_topk.split(",") if item.strip())
+    setup_logging(log_file=str(log_file), level=logging.INFO)
 
-    # 1. 加载模型
-    logger.info("=" * 60)
-    logger.info("加载模型")
-    logger.info("=" * 60)
+    save_process_info(
+        task_name=TASK_NAME,
+        pid=os.getpid(),
+        command=" ".join(sys.argv),
+        log_file=str(log_file),
+        data_path=args.data_path or "./data/20260308-v2.csv",
+        target=args.target,
+        output_dir=args.output_dir,
+        model_path=args.model_path,
+    )
+    atexit.register(complete_process_if_running, TASK_NAME, os.getpid())
 
-    predictor = load_model(model_path)
-    logger.info(f"模型加载完成: {model_path}")
-    logger.info(f"标签: {predictor.label}")
-    logger.info(f"评估指标: {predictor.eval_metric}")
-    logger.info(f"问题类型: {predictor.problem_type}")
-    logger.info(f"最佳模型: {predictor.model_best}")
+    try:
+        model_path = Path(args.model_path)
+        # 如果指定的模型路径不存在，尝试自动检测
+        if not model_path.exists():
+            detected_path = find_available_model(model_path)
+            if detected_path.exists():
+                logger.info(f"模型路径 {model_path} 不存在，使用检测到的模型: {detected_path}")
+                model_path = detected_path
+            else:
+                logger.error("未找到可用模型，请先运行训练脚本")
+                logger.error("  uv run python scripts/train_ohab.py")
+                sys.exit(1)
 
-    # 2. 加载测试数据
-    logger.info("\n" + "=" * 60)
-    logger.info("加载测试数据")
-    logger.info("=" * 60)
+        output_dir = Path(args.output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        top_ratios = tuple(float(item.strip()) / 100 for item in args.report_topk.split(",") if item.strip())
 
-    data_path = args.data_path or "./data/20260308-v2.csv"
+        # 1. 加载模型
+        logger.info("=" * 60)
+        logger.info("加载模型")
+        logger.info("=" * 60)
 
-    loader = DataLoader(data_path, auto_adapt=True)
-    df = loader.load()
+        predictor = load_model(model_path)
+        logger.info(f"模型加载完成: {model_path}")
+        logger.info(f"标签: {predictor.label}")
+        logger.info(f"评估指标: {predictor.eval_metric}")
+        logger.info(f"问题类型: {predictor.problem_type}")
+        logger.info(f"最佳模型: {predictor.model_best}")
 
-    # 过滤 Unknown
-    target = predictor.label
-    if target in df.columns:
-        df = df[df[target] != "Unknown"].copy()
-        logger.info(f"过滤 Unknown 后: {len(df)} 行")
+        # 2. 加载测试数据
+        logger.info("\n" + "=" * 60)
+        logger.info("加载测试数据")
+        logger.info("=" * 60)
 
-    # 自动识别防泄漏切分标记 (Smart Test Set Filtering)
-    metadata = load_feature_metadata(model_path)
-    split_info = metadata.get("split_info", {})
-    label_policy = metadata.get("label_policy", {})
-    label_mode = metadata.get("label_mode", "ohab")
-    interaction_context = metadata.get("interaction_context", {})
-    decision_policy = metadata.get("decision_policy", {"strategy": "argmax"})
-    comparison_config = metadata.get("model_comparison", {"enabled": False})
+        data_path = args.data_path or "./data/20260308-v2.csv"
+
+        loader = DataLoader(data_path, auto_adapt=True)
+        df = loader.load()
+
+        # 过滤 Unknown
+        target = predictor.label
+        if target in df.columns:
+            df = df[df[target] != "Unknown"].copy()
+            logger.info(f"过滤 Unknown 后: {len(df)} 行")
+
+        # 自动识别防泄漏切分标记 (Smart Test Set Filtering)
+        metadata = load_feature_metadata(model_path)
+        split_info = metadata.get("split_info", {})
+        label_policy = metadata.get("label_policy", {})
+        label_mode = metadata.get("label_mode", "ohab")
+        interaction_context = metadata.get("interaction_context", {})
+        decision_policy = metadata.get("decision_policy", {"strategy": "argmax"})
+        comparison_config = metadata.get("model_comparison", {"enabled": False})
     
-    if split_info:
-        logger.info(f"读取到模型切分元数据，模式: {split_info.get('mode')}")
-        mode = split_info.get("mode")
-        
-        if mode in ["oot", "oot_manual"]:
+        if split_info:
+            logger.info(f"读取到模型切分元数据，模式: {split_info.get('mode')}")
+            mode = split_info.get("mode")
+
+            if mode in ["oot", "oot_manual"]:
+                time_column = "线索创建时间"
+                if time_column not in df.columns:
+                    logger.error(f"OOT 模式需要 '{time_column}' 列，但数据中不存在")
+                    sys.exit(1)
+
+                df[time_column] = pd.to_datetime(df[time_column], errors="coerce")
+                valid_end_str = split_info.get("valid_end")
+                valid_end = pd.Timestamp(valid_end_str)
+
+                df = df[df[time_column] >= valid_end].copy()
+                logger.info(f"OOT 测试集自动切分: 时间 >= {valid_end_str}")
+
+            elif mode == "random":
+                # 降级情况下的防泄漏过滤
+                if "test_ids" in split_info and "id_column" in split_info:
+                    id_col = split_info["id_column"]
+                    test_ids = set(split_info["test_ids"])
+                    df = df[df[id_col].isin(test_ids)].copy()
+                    logger.info(f"随机切分防泄漏: 根据 {id_col} 提取了 {len(test_ids)} 个测试集样本")
+                elif "test_indices" in split_info:
+                    test_indices = split_info["test_indices"]
+                    # 注意：物理索引过滤前提是 df 未被重新排序或清洗改变行号
+                    df = df.iloc[test_indices].copy()
+                    logger.info(f"随机切分防泄漏: 根据物理索引提取了 {len(test_indices)} 个测试集样本")
+                else:
+                    logger.warning("模型为随机切分但未找到测试集标记，可能存在数据泄漏风险！")
+
+        elif args.oot_test:
+            # 向后兼容：手动指定 OOT 测试集
             time_column = "线索创建时间"
             if time_column not in df.columns:
                 logger.error(f"OOT 模式需要 '{time_column}' 列，但数据中不存在")
                 sys.exit(1)
-            
-            df[time_column] = pd.to_datetime(df[time_column], errors="coerce")
-            valid_end_str = split_info.get("valid_end")
-            valid_end = pd.Timestamp(valid_end_str)
 
+            df[time_column] = pd.to_datetime(df[time_column], errors="coerce")
+            valid_end = pd.Timestamp(args.valid_end)
+
+            # 测试集：时间 >= valid_end
             df = df[df[time_column] >= valid_end].copy()
-            logger.info(f"OOT 测试集自动切分: 时间 >= {valid_end_str}")
-            
-        elif mode == "random":
-            # 降级情况下的防泄漏过滤
-            if "test_ids" in split_info and "id_column" in split_info:
-                id_col = split_info["id_column"]
-                test_ids = set(split_info["test_ids"])
-                df = df[df[id_col].isin(test_ids)].copy()
-                logger.info(f"随机切分防泄漏: 根据 {id_col} 提取了 {len(test_ids)} 个测试集样本")
-            elif "test_indices" in split_info:
-                test_indices = split_info["test_indices"]
-                # 注意：物理索引过滤前提是 df 未被重新排序或清洗改变行号
-                df = df.iloc[test_indices].copy()
-                logger.info(f"随机切分防泄漏: 根据物理索引提取了 {len(test_indices)} 个测试集样本")
-            else:
-                logger.warning("模型为随机切分但未找到测试集标记，可能存在数据泄漏风险！")
-                
-    elif args.oot_test:
-        # 向后兼容：手动指定 OOT 测试集
-        time_column = "线索创建时间"
-        if time_column not in df.columns:
-            logger.error(f"OOT 模式需要 '{time_column}' 列，但数据中不存在")
+            logger.info(f"OOT 测试集切分(手动参数): 时间 >= {args.valid_end}")
+
+        else:
+            logger.warning("未启用防泄漏过滤，当前验证集可能包含训练数据！")
+
+        logger.info(f"验证集最终样本量: {len(df)} 行")
+
+        if len(df) == 0:
+            logger.error("测试集为空，请检查数据时间范围或切分逻辑")
             sys.exit(1)
 
-        df[time_column] = pd.to_datetime(df[time_column], errors="coerce")
-        valid_end = pd.Timestamp(args.valid_end)
+        final_ordered = None
+        if FINAL_ORDERED_COLUMN in df.columns:
+            final_ordered = df[FINAL_ORDERED_COLUMN].copy()
+            logger.info(f"检测到 {FINAL_ORDERED_COLUMN}，将仅用于业务转化验证")
 
-        # 测试集：时间 >= valid_end
-        df = df[df[time_column] >= valid_end].copy()
-        logger.info(f"OOT 测试集切分(手动参数): 时间 >= {args.valid_end}")
-    
-    else:
-        logger.warning("未启用防泄漏过滤，当前验证集可能包含训练数据！")
+        if label_policy:
+            df = apply_ohab_label_policy(df, target, label_policy)
+            df = filter_to_effective_ohab_labels(df, target, label_policy)
+            logger.info(f"应用训练标签策略: {label_policy}")
 
-    logger.info(f"验证集最终样本量: {len(df)} 行")
-
-    if len(df) == 0:
-        logger.error("测试集为空，请检查数据时间范围或切分逻辑")
-        sys.exit(1)
-
-    final_ordered = None
-    if FINAL_ORDERED_COLUMN in df.columns:
-        final_ordered = df[FINAL_ORDERED_COLUMN].copy()
-        logger.info(f"检测到 {FINAL_ORDERED_COLUMN}，将仅用于业务转化验证")
-
-    if label_policy:
-        df = apply_ohab_label_policy(df, target, label_policy)
-        df = filter_to_effective_ohab_labels(df, target, label_policy)
-        logger.info(f"应用训练标签策略: {label_policy}")
-
-    business_metric_columns = [
-        "到店标签_7天",
-        "到店标签_14天",
-        "到店标签_30天",
-        "试驾标签_7天",
-        "试驾标签_14天",
-        "试驾标签_30天",
-        FINAL_ORDERED_COLUMN,
-    ]
-    business_metric_frame = df[[col for col in business_metric_columns if col in df.columns]].copy()
-
-    # 排除不需要的列（但保留目标列用于评估）
-    excluded_columns = get_excluded_columns(target)
-    cols_to_drop = [col for col in excluded_columns if col in df.columns and col != target]
-    if cols_to_drop:
-        df = df.drop(columns=cols_to_drop)
-        logger.info(f"排除 {len(cols_to_drop)} 列: {cols_to_drop[:5]}{'...' if len(cols_to_drop) > 5 else ''}")
-
-    # 特征工程（与训练时相同的处理）
-    logger.info("执行特征工程...")
-    feature_engineer = FeatureEngineer(
-        time_columns=config.feature.time_columns,
-        numeric_columns=config.feature.numeric_features,
-        interaction_context=interaction_context,
-    )
-
-    # 注意：AutoGluon 自动处理类别编码和缺失值
-    # FeatureEngineer 只处理时间特征提取和数值类型转换
-    df_processed, _ = feature_engineer.transform(df, interaction_context=interaction_context)
-
-    # 保存目标值用于评估
-    y_true = df_processed[target].values
-
-    # 3. 预测与评估
-    logger.info("\n" + "=" * 60)
-    logger.info("执行预测与评估")
-    logger.info("=" * 60)
-
-    from sklearn.metrics import (
-        accuracy_score,
-        balanced_accuracy_score,
-        classification_report,
-        confusion_matrix,
-        matthews_corrcoef,
-    )
-
-    if comparison_config.get("enabled") and comparison_config.get("models"):
-        model_specs = list(comparison_config["models"].items())
-    else:
-        model_specs = [
-            (
-                predictor.model_best,
-                {
-                    "role": "best",
-                    "decision_policy": decision_policy,
-                },
-            )
+        business_metric_columns = [
+            "到店标签_7天",
+            "到店标签_14天",
+            "到店标签_30天",
+            "试驾标签_7天",
+            "试驾标签_14天",
+            "试驾标签_30天",
+            FINAL_ORDERED_COLUMN,
         ]
+        business_metric_frame = df[[col for col in business_metric_columns if col in df.columns]].copy()
 
-    comparison_rows = []
-    per_model_outputs = {}
+        # 排除不需要的列（但保留目标列用于评估）
+        excluded_columns = get_excluded_columns(target)
+        cols_to_drop = [col for col in excluded_columns if col in df.columns and col != target]
+        if cols_to_drop:
+            df = df.drop(columns=cols_to_drop)
+            logger.info(f"排除 {len(cols_to_drop)} 列: {cols_to_drop[:5]}{'...' if len(cols_to_drop) > 5 else ''}")
 
-    for model_name, model_cfg in model_specs:
-        role = model_cfg.get("role", model_name)
-        current_policy = model_cfg.get("decision_policy", decision_policy)
-        y_pred, y_proba = run_model_predictions(
-            predictor=predictor,
-            data=df_processed,
-            label_mode=label_mode,
-            decision_policy=current_policy,
-            model_name=model_name,
+        # 特征工程（与训练时相同的处理）
+        logger.info("执行特征工程...")
+        feature_engineer = FeatureEngineer(
+            time_columns=config.feature.time_columns,
+            numeric_columns=config.feature.numeric_features,
+            interaction_context=interaction_context,
         )
 
-        accuracy = accuracy_score(y_true, y_pred)
-        balanced_acc = balanced_accuracy_score(y_true, y_pred)
-        mcc = matthews_corrcoef(y_true, y_pred)
-        cm = confusion_matrix(y_true, y_pred)
-        report = classification_report(y_true, y_pred)
-        confusion_df = confusion_matrix_frame(y_true, y_pred)
-        classification_dict = classification_report_dict(y_true, y_pred)
-        class_ranking_report = compute_class_ranking_report(y_true, y_proba, top_ratios=top_ratios)
-        b_threshold_report = None
-        if "B" in y_proba.columns:
-            b_threshold_report = compute_threshold_report(y_true, y_proba["B"], positive_label="B")
+        # 注意：AutoGluon 自动处理类别编码和缺失值
+        # FeatureEngineer 只处理时间特征提取和数值类型转换
+        df_processed, _ = feature_engineer.transform(df, interaction_context=interaction_context)
 
-        results_df = pd.DataFrame({
-            "真实标签": y_true,
-            "预测标签": y_pred.values if hasattr(y_pred, "values") else y_pred,
-        })
-        if final_ordered is not None:
-            final_ordered = final_ordered.loc[df_processed.index].fillna(0).astype(int)
-            results_df["实际下定"] = final_ordered.values
-        for col in y_proba.columns:
-            results_df[f"概率_{col}"] = y_proba[col].values
+        # 保存目标值用于评估
+        y_true = df_processed[target].values
 
-        bucket_summary_df = pd.DataFrame()
-        monotonicity_result = {"passed": False, "metric": None, "message": "未启用 HAB 桶验证"}
-        lead_actions_df = pd.DataFrame()
-        if label_mode == "hab":
-            bucket_input_df = pd.DataFrame({
-                "预测标签": y_pred.values if hasattr(y_pred, "values") else y_pred,
+        # 3. 预测与评估
+        logger.info("\n" + "=" * 60)
+        logger.info("执行预测与评估")
+        logger.info("=" * 60)
+
+        from sklearn.metrics import (
+            accuracy_score,
+            balanced_accuracy_score,
+            classification_report,
+            confusion_matrix,
+            matthews_corrcoef,
+        )
+
+        if comparison_config.get("enabled") and comparison_config.get("models"):
+            model_specs = list(comparison_config["models"].items())
+        else:
+            model_specs = [
+                (
+                    predictor.model_best,
+                    {
+                        "role": "best",
+                        "decision_policy": decision_policy,
+                    },
+                )
+            ]
+
+        comparison_rows = []
+        per_model_outputs = {}
+
+        for model_name, model_cfg in model_specs:
+            role = model_cfg.get("role", model_name)
+            current_policy = model_cfg.get("decision_policy", decision_policy)
+            y_pred, y_proba = run_model_predictions(
+                predictor=predictor,
+                data=df_processed,
+                label_mode=label_mode,
+                decision_policy=current_policy,
+                model_name=model_name,
+            )
+
+            accuracy = accuracy_score(y_true, y_pred)
+            balanced_acc = balanced_accuracy_score(y_true, y_pred)
+            mcc = matthews_corrcoef(y_true, y_pred)
+            cm = confusion_matrix(y_true, y_pred)
+            report = classification_report(y_true, y_pred)
+            confusion_df = confusion_matrix_frame(y_true, y_pred)
+            classification_dict = classification_report_dict(y_true, y_pred)
+            class_ranking_report = compute_class_ranking_report(y_true, y_proba, top_ratios=top_ratios)
+            b_threshold_report = None
+            if "B" in y_proba.columns:
+                b_threshold_report = compute_threshold_report(y_true, y_proba["B"], positive_label="B")
+
+            results_df = pd.DataFrame({
                 "真实标签": y_true,
+                "预测标签": y_pred.values if hasattr(y_pred, "values") else y_pred,
             })
-            for metric_column in business_metric_columns:
-                if metric_column in business_metric_frame.columns:
-                    bucket_input_df[metric_column] = business_metric_frame.loc[df_processed.index, metric_column].values
-            bucket_summary_df = compute_hab_bucket_summary(bucket_input_df, label_column="预测标签")
-            monotonicity_result = check_hab_monotonicity(bucket_summary_df)
+            if final_ordered is not None:
+                final_ordered = final_ordered.loc[df_processed.index].fillna(0).astype(int)
+                results_df["实际下定"] = final_ordered.values
+            for col in y_proba.columns:
+                results_df[f"概率_{col}"] = y_proba[col].values
 
-            lead_action_rows = []
-            for idx, row in df_processed.reset_index(drop=True).iterrows():
-                probability_map = {label: float(y_proba.iloc[idx].get(label, 0.0)) for label in y_proba.columns}
-                lead_action_rows.append(
-                    build_lead_action_record(
-                        row=row,
-                        predicted_label=str(y_pred.iloc[idx] if hasattr(y_pred, "iloc") else y_pred[idx]),
-                        probability_map=probability_map,
+            bucket_summary_df = pd.DataFrame()
+            monotonicity_result = {"passed": False, "metric": None, "message": "未启用 HAB 桶验证"}
+            lead_actions_df = pd.DataFrame()
+            if label_mode == "hab":
+                bucket_input_df = pd.DataFrame({
+                    "预测标签": y_pred.values if hasattr(y_pred, "values") else y_pred,
+                    "真实标签": y_true,
+                })
+                for metric_column in business_metric_columns:
+                    if metric_column in business_metric_frame.columns:
+                        bucket_input_df[metric_column] = business_metric_frame.loc[df_processed.index, metric_column].values
+                bucket_summary_df = compute_hab_bucket_summary(bucket_input_df, label_column="预测标签")
+                monotonicity_result = check_hab_monotonicity(bucket_summary_df)
+
+                lead_action_rows = []
+                for idx, row in df_processed.reset_index(drop=True).iterrows():
+                    probability_map = {label: float(y_proba.iloc[idx].get(label, 0.0)) for label in y_proba.columns}
+                    lead_action_rows.append(
+                        build_lead_action_record(
+                            row=row,
+                            predicted_label=str(y_pred.iloc[idx] if hasattr(y_pred, "iloc") else y_pred[idx]),
+                            probability_map=probability_map,
+                        )
                     )
-                )
-            lead_actions_df = pd.DataFrame(lead_action_rows)
+                lead_actions_df = pd.DataFrame(lead_action_rows)
 
-        suffix = role
-        results_df.to_csv(output_dir / f"predictions_{suffix}.csv", index=False, encoding="utf-8-sig")
-        confusion_df.to_csv(output_dir / f"confusion_matrix_{suffix}.csv", encoding="utf-8-sig")
-        dump_json(output_dir / f"classification_report_{suffix}.json", classification_dict)
-        dump_json(output_dir / f"class_ranking_report_{suffix}.json", class_ranking_report)
-        if b_threshold_report is not None:
-            b_threshold_report.to_csv(output_dir / f"b_threshold_report_{suffix}.csv", index=False, encoding="utf-8-sig")
-        if not bucket_summary_df.empty:
-            bucket_summary_df.to_csv(output_dir / f"hab_bucket_summary_{suffix}.csv", index=False, encoding="utf-8-sig")
-            dump_json(output_dir / f"hab_bucket_summary_{suffix}.json", bucket_summary_df.to_dict(orient="records"))
-            dump_json(output_dir / f"monotonicity_check_{suffix}.json", monotonicity_result)
-        if not lead_actions_df.empty:
-            lead_actions_df.to_csv(output_dir / f"lead_actions_{suffix}.csv", index=False, encoding="utf-8-sig")
+            suffix = role
+            results_df.to_csv(output_dir / f"predictions_{suffix}.csv", index=False, encoding="utf-8-sig")
+            confusion_df.to_csv(output_dir / f"confusion_matrix_{suffix}.csv", encoding="utf-8-sig")
+            dump_json(output_dir / f"classification_report_{suffix}.json", classification_dict)
+            dump_json(output_dir / f"class_ranking_report_{suffix}.json", class_ranking_report)
+            if b_threshold_report is not None:
+                b_threshold_report.to_csv(output_dir / f"b_threshold_report_{suffix}.csv", index=False, encoding="utf-8-sig")
+            if not bucket_summary_df.empty:
+                bucket_summary_df.to_csv(output_dir / f"hab_bucket_summary_{suffix}.csv", index=False, encoding="utf-8-sig")
+                dump_json(output_dir / f"hab_bucket_summary_{suffix}.json", bucket_summary_df.to_dict(orient="records"))
+                dump_json(output_dir / f"monotonicity_check_{suffix}.json", monotonicity_result)
+            if not lead_actions_df.empty:
+                lead_actions_df.to_csv(output_dir / f"lead_actions_{suffix}.csv", index=False, encoding="utf-8-sig")
 
-        comparison_row = {
-            "model_name": model_name,
-            "role": role,
-            "模型角色": ROLE_DISPLAY.get(role, role),
-            "accuracy": float(accuracy),
-            "balanced_accuracy": float(balanced_acc),
-            "mcc": float(mcc),
-            "macro_f1": float(classification_dict.get("macro avg", {}).get("f1-score", 0.0)),
-            "b_recall": float(classification_dict.get("B", {}).get("recall", 0.0)),
-            "monotonicity_passed": bool(monotonicity_result.get("passed", False)),
-            "monotonicity_metric": monotonicity_result.get("metric"),
-        }
-        if not bucket_summary_df.empty:
-            for bucket in ["H", "A", "B"]:
-                bucket_slice = bucket_summary_df[bucket_summary_df["bucket"] == bucket]
-                if not bucket_slice.empty:
-                    comparison_row[f"{bucket.lower()}_arrive_14d_rate"] = float(bucket_slice.iloc[0].get("到店标签_14天_rate", 0.0))
-                    comparison_row[f"{bucket.lower()}_drive_14d_rate"] = float(bucket_slice.iloc[0].get("试驾标签_14天_rate", 0.0))
-        comparison_rows.append(comparison_row)
-        per_model_outputs[role] = {
-            "model_name": model_name,
-            "decision_policy": current_policy,
-            "results_df": results_df,
-            "confusion_df": confusion_df,
-            "classification_dict": classification_dict,
-            "class_ranking_report": class_ranking_report,
-            "bucket_summary_df": bucket_summary_df,
-            "monotonicity_result": monotonicity_result,
-            "lead_actions_df": lead_actions_df,
-            "report": report,
-            "cm": cm,
-        }
+            comparison_row = {
+                "model_name": model_name,
+                "role": role,
+                "模型角色": ROLE_DISPLAY.get(role, role),
+                "accuracy": float(accuracy),
+                "balanced_accuracy": float(balanced_acc),
+                "mcc": float(mcc),
+                "macro_f1": float(classification_dict.get("macro avg", {}).get("f1-score", 0.0)),
+                "b_recall": float(classification_dict.get("B", {}).get("recall", 0.0)),
+                "monotonicity_passed": bool(monotonicity_result.get("passed", False)),
+                "monotonicity_metric": monotonicity_result.get("metric"),
+            }
+            if not bucket_summary_df.empty:
+                for bucket in ["H", "A", "B"]:
+                    bucket_slice = bucket_summary_df[bucket_summary_df["bucket"] == bucket]
+                    if not bucket_slice.empty:
+                        comparison_row[f"{bucket.lower()}_arrive_14d_rate"] = float(bucket_slice.iloc[0].get("到店标签_14天_rate", 0.0))
+                        comparison_row[f"{bucket.lower()}_drive_14d_rate"] = float(bucket_slice.iloc[0].get("试驾标签_14天_rate", 0.0))
+            comparison_rows.append(comparison_row)
+            per_model_outputs[role] = {
+                "model_name": model_name,
+                "decision_policy": current_policy,
+                "results_df": results_df,
+                "confusion_df": confusion_df,
+                "classification_dict": classification_dict,
+                "class_ranking_report": class_ranking_report,
+                "bucket_summary_df": bucket_summary_df,
+                "monotonicity_result": monotonicity_result,
+                "lead_actions_df": lead_actions_df,
+                "report": report,
+                "cm": cm,
+            }
 
-    comparison_df = pd.DataFrame(comparison_rows)
-    if not comparison_df.empty:
-        baseline_rows = comparison_df[comparison_df["role"] == "baseline"]
-        if not baseline_rows.empty:
-            baseline_row = baseline_rows.iloc[0]
-            for metric in [
-                "accuracy",
-                "balanced_accuracy",
-                "mcc",
-                "macro_f1",
-                "b_recall",
-            ]:
-                comparison_df[f"delta_vs_baseline_{metric}"] = comparison_df[metric] - float(baseline_row[metric])
-        comparison_df.to_csv(output_dir / "model_comparison.csv", index=False, encoding="utf-8-sig")
-        dump_json(output_dir / "model_comparison.json", comparison_df.to_dict(orient="records"))
+        comparison_df = pd.DataFrame(comparison_rows)
+        if not comparison_df.empty:
+            baseline_rows = comparison_df[comparison_df["role"] == "baseline"]
+            if not baseline_rows.empty:
+                baseline_row = baseline_rows.iloc[0]
+                for metric in [
+                    "accuracy",
+                    "balanced_accuracy",
+                    "mcc",
+                    "macro_f1",
+                    "b_recall",
+                ]:
+                    comparison_df[f"delta_vs_baseline_{metric}"] = comparison_df[metric] - float(baseline_row[metric])
+            comparison_df.to_csv(output_dir / "model_comparison.csv", index=False, encoding="utf-8-sig")
+            dump_json(output_dir / "model_comparison.json", comparison_df.to_dict(orient="records"))
 
-    primary_role = "best" if "best" in per_model_outputs else next(iter(per_model_outputs))
-    primary_output = per_model_outputs[primary_role]
+        primary_role = "best" if "best" in per_model_outputs else next(iter(per_model_outputs))
+        primary_output = per_model_outputs[primary_role]
 
-    primary_output["results_df"].to_csv(output_dir / "predictions.csv", index=False, encoding="utf-8-sig")
-    primary_output["confusion_df"].to_csv(output_dir / "confusion_matrix.csv", encoding="utf-8-sig")
-    dump_json(output_dir / "classification_report.json", primary_output["classification_dict"])
-    dump_json(output_dir / "class_ranking_report.json", primary_output["class_ranking_report"])
-    if not primary_output["bucket_summary_df"].empty:
-        primary_output["bucket_summary_df"].to_csv(output_dir / "hab_bucket_summary.csv", index=False, encoding="utf-8-sig")
-        dump_json(output_dir / "hab_bucket_summary.json", primary_output["bucket_summary_df"].to_dict(orient="records"))
-        dump_json(output_dir / "monotonicity_check.json", primary_output["monotonicity_result"])
-    if not primary_output["lead_actions_df"].empty:
-        primary_output["lead_actions_df"].to_csv(output_dir / "lead_actions.csv", index=False, encoding="utf-8-sig")
-
-    dump_json(
-        output_dir / "evaluation_summary.json",
-        {
-            "accuracy": comparison_df.loc[comparison_df["role"] == primary_role, "accuracy"].iloc[0],
-            "balanced_accuracy": comparison_df.loc[comparison_df["role"] == primary_role, "balanced_accuracy"].iloc[0],
-            "mcc": comparison_df.loc[comparison_df["role"] == primary_role, "mcc"].iloc[0],
-            "label_policy": label_policy,
-            "label_mode": label_mode,
-            "decision_policy": per_model_outputs[primary_role]["decision_policy"],
-            "split_info": split_info,
-            "top_ratios": list(top_ratios),
-            "monotonicity_check": primary_output["monotonicity_result"],
-            "model_comparison": comparison_config,
-            "comparison_rows": comparison_df.to_dict(orient="records"),
-        },
-    )
-
-    report_path = output_dir / "evaluation_report.txt"
-    with open(report_path, "w", encoding="utf-8") as f:
-        f.write("OHAB 模型评估报告\n")
-        f.write("=" * 60 + "\n\n")
-        f.write(f"模型路径: {model_path}\n")
-        f.write(f"数据路径: {data_path}\n")
-        f.write(f"样本数量: {len(y_true)}\n")
-        f.write(f"最佳模型: {predictor.model_best}\n\n")
-        if not comparison_df.empty and len(comparison_df) > 1:
-            f.write("模型对比\n")
-            f.write("-" * 40 + "\n")
-            for row in comparison_df.to_dict(orient="records"):
-                f.write(
-                    f"{ROLE_DISPLAY.get(row['role'], row['role'])}（{row['model_name']}）: "
-                    f"平衡准确率 Balanced Accuracy={row['balanced_accuracy']:.4f}, "
-                    f"宏平均 F1 Macro F1={row['macro_f1']:.4f}, "
-                    f"B 类召回率 B Recall={row['b_recall']:.4f}\n"
-                )
-            f.write("\n")
-
-        f.write("主模型评估指标\n")
-        f.write("-" * 40 + "\n")
-        f.write(f"准确率 Accuracy: {comparison_df.loc[comparison_df['role'] == primary_role, 'accuracy'].iloc[0]:.4f}\n")
-        f.write(f"平衡准确率 Balanced Accuracy: {comparison_df.loc[comparison_df['role'] == primary_role, 'balanced_accuracy'].iloc[0]:.4f}\n")
-        f.write(f"马修斯相关系数 MCC: {comparison_df.loc[comparison_df['role'] == primary_role, 'mcc'].iloc[0]:.4f}\n\n")
-        if label_mode == "hab":
-            f.write(f"标签模式: {label_mode}\n")
-            f.write(f"决策策略: {json.dumps(primary_output['decision_policy'], ensure_ascii=False)}\n\n")
-        f.write("混淆矩阵\n")
-        f.write("-" * 40 + "\n")
-        f.write(f"{primary_output['cm']}\n\n")
-        f.write("分类报告\n")
-        f.write("-" * 40 + "\n")
-        f.write(primary_output["report"])
+        primary_output["results_df"].to_csv(output_dir / "predictions.csv", index=False, encoding="utf-8-sig")
+        primary_output["confusion_df"].to_csv(output_dir / "confusion_matrix.csv", encoding="utf-8-sig")
+        dump_json(output_dir / "classification_report.json", primary_output["classification_dict"])
+        dump_json(output_dir / "class_ranking_report.json", primary_output["class_ranking_report"])
         if not primary_output["bucket_summary_df"].empty:
-            f.write("\n\nHAB 桶业务表现\n")
+            primary_output["bucket_summary_df"].to_csv(output_dir / "hab_bucket_summary.csv", index=False, encoding="utf-8-sig")
+            dump_json(output_dir / "hab_bucket_summary.json", primary_output["bucket_summary_df"].to_dict(orient="records"))
+            dump_json(output_dir / "monotonicity_check.json", primary_output["monotonicity_result"])
+        if not primary_output["lead_actions_df"].empty:
+            primary_output["lead_actions_df"].to_csv(output_dir / "lead_actions.csv", index=False, encoding="utf-8-sig")
+
+        dump_json(
+            output_dir / "evaluation_summary.json",
+            {
+                "accuracy": comparison_df.loc[comparison_df["role"] == primary_role, "accuracy"].iloc[0],
+                "balanced_accuracy": comparison_df.loc[comparison_df["role"] == primary_role, "balanced_accuracy"].iloc[0],
+                "mcc": comparison_df.loc[comparison_df["role"] == primary_role, "mcc"].iloc[0],
+                "label_policy": label_policy,
+                "label_mode": label_mode,
+                "decision_policy": per_model_outputs[primary_role]["decision_policy"],
+                "split_info": split_info,
+                "top_ratios": list(top_ratios),
+                "monotonicity_check": primary_output["monotonicity_result"],
+                "model_comparison": comparison_config,
+                "comparison_rows": comparison_df.to_dict(orient="records"),
+            },
+        )
+
+        report_path = output_dir / "evaluation_report.txt"
+        with open(report_path, "w", encoding="utf-8") as f:
+            f.write("OHAB 模型评估报告\n")
+            f.write("=" * 60 + "\n\n")
+            f.write(f"模型路径: {model_path}\n")
+            f.write(f"数据路径: {data_path}\n")
+            f.write(f"样本数量: {len(y_true)}\n")
+            f.write(f"最佳模型: {predictor.model_best}\n\n")
+            if not comparison_df.empty and len(comparison_df) > 1:
+                f.write("模型对比\n")
+                f.write("-" * 40 + "\n")
+                for row in comparison_df.to_dict(orient="records"):
+                    f.write(
+                        f"{ROLE_DISPLAY.get(row['role'], row['role'])}（{row['model_name']}）: "
+                        f"平衡准确率 Balanced Accuracy={row['balanced_accuracy']:.4f}, "
+                        f"宏平均 F1 Macro F1={row['macro_f1']:.4f}, "
+                        f"B 类召回率 B Recall={row['b_recall']:.4f}\n"
+                    )
+                f.write("\n")
+
+            f.write("主模型评估指标\n")
             f.write("-" * 40 + "\n")
-            for line in build_bucket_summary_text(primary_output["bucket_summary_df"].to_dict(orient="records")):
-                f.write(f"- {line}\n")
-            f.write(f"\n单调性检查: {primary_output['monotonicity_result'].get('message')}\n")
+            f.write(f"准确率 Accuracy: {comparison_df.loc[comparison_df['role'] == primary_role, 'accuracy'].iloc[0]:.4f}\n")
+            f.write(f"平衡准确率 Balanced Accuracy: {comparison_df.loc[comparison_df['role'] == primary_role, 'balanced_accuracy'].iloc[0]:.4f}\n")
+            f.write(f"马修斯相关系数 MCC: {comparison_df.loc[comparison_df['role'] == primary_role, 'mcc'].iloc[0]:.4f}\n\n")
+            if label_mode == "hab":
+                f.write(f"标签模式: {label_mode}\n")
+                f.write(f"决策策略: {json.dumps(primary_output['decision_policy'], ensure_ascii=False)}\n\n")
+            f.write("混淆矩阵\n")
+            f.write("-" * 40 + "\n")
+            f.write(f"{primary_output['cm']}\n\n")
+            f.write("分类报告\n")
+            f.write("-" * 40 + "\n")
+            f.write(primary_output["report"])
+            if not primary_output["bucket_summary_df"].empty:
+                f.write("\n\nHAB 桶业务表现\n")
+                f.write("-" * 40 + "\n")
+                for line in build_bucket_summary_text(primary_output["bucket_summary_df"].to_dict(orient="records")):
+                    f.write(f"- {line}\n")
+                f.write(f"\n单调性检查: {primary_output['monotonicity_result'].get('message')}\n")
 
-    logger.info(f"评估报告已保存: {report_path}")
+        logger.info(f"评估报告已保存: {report_path}")
 
-    print("\n" + "=" * 60)
-    print("验证完成")
-    print("=" * 60)
-    primary_row = comparison_df[comparison_df["role"] == primary_role].iloc[0]
-    print(f"准确率 Accuracy: {primary_row['accuracy']:.4f}")
-    print(f"平衡准确率 Balanced Accuracy: {primary_row['balanced_accuracy']:.4f}")
-    print(f"马修斯相关系数 MCC: {primary_row['mcc']:.4f}")
-    print(f"\n结果保存在: {output_dir}")
+        print("\n" + "=" * 60)
+        print("验证完成")
+        print("=" * 60)
+        primary_row = comparison_df[comparison_df["role"] == primary_role].iloc[0]
+        print(f"准确率 Accuracy: {primary_row['accuracy']:.4f}")
+        print(f"平衡准确率 Balanced Accuracy: {primary_row['balanced_accuracy']:.4f}")
+        print(f"马修斯相关系数 MCC: {primary_row['mcc']:.4f}")
+        print(f"\n结果保存在: {output_dir}")
+    except Exception as e:
+        update_process_status(TASK_NAME, os.getpid(), "failed", error=str(e))
+        logger.exception("模型验证失败")
+        raise
 
 
 if __name__ == "__main__":

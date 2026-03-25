@@ -277,7 +277,7 @@ print('评估指标:', p.eval_metric)
 
 ```bash
 # 使用验证脚本（默认读取 ./outputs/models/ohab_model）
-uv run python scripts/validate_model.py --data-path ./data/202602~03.tsv
+uv run python scripts/validate_model.py --daemon --data-path ./data/202602~03.tsv
 
 # 显式指定模型路径，避免误用旧的 ohab_oot 目录
 uv run python scripts/validate_model.py \
