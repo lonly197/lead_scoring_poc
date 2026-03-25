@@ -23,13 +23,17 @@ project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
 from config.config import config, get_excluded_columns
-from src.data.label_policy import apply_ohab_label_policy
+from src.data.label_policy import apply_ohab_label_policy, filter_to_effective_ohab_labels
 from src.data.loader import DataLoader, FeatureEngineer
+from src.evaluation.business_logic import build_bucket_summary_text, build_lead_action_record
 from src.evaluation.ohab_metrics import (
+    apply_hab_decision_policy,
     classification_report_dict,
+    compute_hab_bucket_summary,
     compute_class_ranking_report,
     compute_threshold_report,
     confusion_matrix_frame,
+    check_hab_monotonicity,
 )
 from src.utils.helpers import setup_logging
 
@@ -213,7 +217,9 @@ def main():
     metadata = load_feature_metadata(model_path)
     split_info = metadata.get("split_info", {})
     label_policy = metadata.get("label_policy", {})
+    label_mode = metadata.get("label_mode", "ohab")
     interaction_context = metadata.get("interaction_context", {})
+    decision_policy = metadata.get("decision_policy", {"strategy": "argmax"})
     
     if split_info:
         logger.info(f"读取到模型切分元数据，模式: {split_info.get('mode')}")
@@ -277,7 +283,19 @@ def main():
 
     if label_policy:
         df = apply_ohab_label_policy(df, target, label_policy)
+        df = filter_to_effective_ohab_labels(df, target, label_policy)
         logger.info(f"应用训练标签策略: {label_policy}")
+
+    business_metric_columns = [
+        "到店标签_7天",
+        "到店标签_14天",
+        "到店标签_30天",
+        "试驾标签_7天",
+        "试驾标签_14天",
+        "试驾标签_30天",
+        FINAL_ORDERED_COLUMN,
+    ]
+    business_metric_frame = df[[col for col in business_metric_columns if col in df.columns]].copy()
 
     # 排除不需要的列（但保留目标列用于评估）
     excluded_columns = get_excluded_columns(target)
@@ -306,8 +324,12 @@ def main():
     logger.info("执行预测")
     logger.info("=" * 60)
 
-    y_pred = predictor.predict(df_processed)
+    raw_pred = predictor.predict(df_processed)
     y_proba = predictor.predict_proba(df_processed)
+    if label_mode == "hab":
+        y_pred = apply_hab_decision_policy(y_proba, decision_policy)
+    else:
+        y_pred = raw_pred
 
     logger.info(f"预测完成: {len(y_pred)} 个样本")
 
@@ -380,6 +402,47 @@ def main():
     results_path = output_dir / "predictions.csv"
     results_df.to_csv(results_path, index=False, encoding="utf-8-sig")
     logger.info(f"预测结果已保存: {results_path}")
+
+    bucket_summary_df = pd.DataFrame()
+    monotonicity_result = {"passed": False, "metric": None, "message": "未启用 HAB 桶验证"}
+    lead_actions_df = pd.DataFrame()
+    if label_mode == "hab":
+        bucket_input_df = pd.DataFrame({
+            "预测标签": y_pred.values if hasattr(y_pred, "values") else y_pred,
+            "真实标签": y_true,
+        })
+        for metric_column in [
+            "到店标签_7天",
+            "到店标签_14天",
+            "到店标签_30天",
+            "试驾标签_7天",
+            "试驾标签_14天",
+            "试驾标签_30天",
+            FINAL_ORDERED_COLUMN,
+        ]:
+            if metric_column in business_metric_frame.columns:
+                bucket_input_df[metric_column] = business_metric_frame.loc[df_processed.index, metric_column].values
+        bucket_summary_df = compute_hab_bucket_summary(bucket_input_df, label_column="预测标签")
+        monotonicity_result = check_hab_monotonicity(bucket_summary_df)
+        if not bucket_summary_df.empty:
+            bucket_summary_df.to_csv(output_dir / "hab_bucket_summary.csv", index=False, encoding="utf-8-sig")
+            dump_json(output_dir / "hab_bucket_summary.json", bucket_summary_df.to_dict(orient="records"))
+            dump_json(output_dir / "monotonicity_check.json", monotonicity_result)
+
+        lead_action_rows = []
+        for idx, row in df_processed.reset_index(drop=True).iterrows():
+            probability_map = {label: float(y_proba.iloc[idx].get(label, 0.0)) for label in y_proba.columns}
+            lead_action_rows.append(
+                build_lead_action_record(
+                    row=row,
+                    predicted_label=str(y_pred.iloc[idx] if hasattr(y_pred, "iloc") else y_pred[idx]),
+                    probability_map=probability_map,
+                )
+            )
+        lead_actions_df = pd.DataFrame(lead_action_rows)
+        if not lead_actions_df.empty:
+            lead_actions_df.to_csv(output_dir / "lead_actions.csv", index=False, encoding="utf-8-sig")
+
     confusion_df.to_csv(output_dir / "confusion_matrix.csv", encoding="utf-8-sig")
     dump_json(output_dir / "classification_report.json", classification_dict)
     dump_json(output_dir / "class_ranking_report.json", class_ranking_report)
@@ -392,8 +455,11 @@ def main():
             "balanced_accuracy": balanced_acc,
             "mcc": mcc,
             "label_policy": label_policy,
+            "label_mode": label_mode,
+            "decision_policy": decision_policy,
             "split_info": split_info,
             "top_ratios": list(top_ratios),
+            "monotonicity_check": monotonicity_result,
         },
     )
 
@@ -411,12 +477,21 @@ def main():
         f.write(f"Accuracy: {accuracy:.4f}\n")
         f.write(f"Balanced Accuracy: {balanced_acc:.4f}\n")
         f.write(f"MCC: {mcc:.4f}\n\n")
+        if label_mode == "hab":
+            f.write(f"Label Mode: {label_mode}\n")
+            f.write(f"Decision Policy: {json.dumps(decision_policy, ensure_ascii=False)}\n\n")
         f.write("混淆矩阵\n")
         f.write("-" * 40 + "\n")
         f.write(f"{cm}\n\n")
         f.write("分类报告\n")
         f.write("-" * 40 + "\n")
         f.write(report)
+        if not bucket_summary_df.empty:
+            f.write("\n\nHAB 桶业务表现\n")
+            f.write("-" * 40 + "\n")
+            for line in build_bucket_summary_text(bucket_summary_df.to_dict(orient="records")):
+                f.write(f"- {line}\n")
+            f.write(f"\n单调性检查: {monotonicity_result.get('message')}\n")
 
         # === 追加业务转化漏斗验证 (终态 O 验证) ===
         if final_ordered is not None:

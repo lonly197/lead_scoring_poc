@@ -1,0 +1,88 @@
+import json
+from argparse import Namespace
+
+import pandas as pd
+
+from scripts import generate_business_report
+from src.evaluation.business_logic import build_lead_action_record, get_sop_for_label
+
+
+def test_build_lead_action_record_returns_sop_and_reasons():
+    row = pd.Series(
+        {
+            "线索唯一ID": "DIS1001",
+            "提及试驾": 1,
+            "客户是否主动询问金融政策": "是",
+            "有效通话": 1,
+        }
+    )
+
+    record = build_lead_action_record(row, predicted_label="H", probability_map={"H": 0.82, "A": 0.12, "B": 0.06})
+
+    assert record["线索唯一ID"] == "DIS1001"
+    assert record["预测HAB"] == "H"
+    assert record["建议SOP"] == get_sop_for_label("H")
+    assert record["原因1"]
+
+
+def test_generate_business_report_reads_structured_outputs(tmp_path, monkeypatch):
+    model_dir = tmp_path / "models" / "ohab_model"
+    validation_dir = tmp_path / "validation"
+    output_path = tmp_path / "reports" / "hab_poc_report.md"
+    model_dir.mkdir(parents=True)
+    validation_dir.mkdir(parents=True)
+
+    (model_dir / "business_dimension_contribution.json").write_text(
+        json.dumps({"意图特征": 0.42, "行为特征": 0.31}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    pd.DataFrame(
+        [
+            {"feature": "提及试驾", "importance": 0.4},
+            {"feature": "有效通话", "importance": 0.3},
+        ]
+    ).to_csv(model_dir / "feature_importance.csv", index=False)
+    (validation_dir / "evaluation_summary.json").write_text(
+        json.dumps(
+            {
+                "metrics": {
+                    "balanced_accuracy": 0.58,
+                    "macro avg": {"f1-score": 0.57},
+                }
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    (validation_dir / "hab_bucket_summary.json").write_text(
+        json.dumps(
+            [
+                {"bucket": "H", "sample_ratio": 0.2, "到店标签_14天_rate": 0.4, "试驾标签_14天_rate": 0.3},
+                {"bucket": "A", "sample_ratio": 0.5, "到店标签_14天_rate": 0.2, "试驾标签_14天_rate": 0.1},
+                {"bucket": "B", "sample_ratio": 0.3, "到店标签_14天_rate": 0.05, "试驾标签_14天_rate": 0.03},
+            ],
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    (validation_dir / "monotonicity_check.json").write_text(
+        json.dumps({"message": "H/A/B 分层单调"}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    pd.DataFrame(
+        [
+            {"线索唯一ID": "DIS1", "预测HAB": "H", "建议SOP": "24小时内优先跟进", "原因1": "客户提及试驾"},
+        ]
+    ).to_csv(validation_dir / "lead_actions.csv", index=False)
+
+    monkeypatch.setattr(
+        generate_business_report,
+        "parse_args",
+        lambda: Namespace(model_dir=str(model_dir), validation_dir=str(validation_dir), output_path=str(output_path)),
+    )
+
+    generate_business_report.generate_report()
+
+    content = output_path.read_text(encoding="utf-8")
+    assert "HAB 线索评级 POC 业务报告" in content
+    assert "24小时内优先跟进" in content

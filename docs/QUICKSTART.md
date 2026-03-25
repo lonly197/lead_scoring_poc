@@ -64,41 +64,108 @@ uv run python scripts/run.py train_test_drive --daemon --preset high_quality
 uv run python scripts/run.py train_ohab --daemon --preset high_quality
 ```
 
-### OOT 验证训练 (统一智能版)
+### HAB 评级训练与验证（推荐 POC 主流程）
 
-适用于新格式数据（如 `202602~03.csv`，跨度包含 2 月和 3 月）。现已统一入口至 `train_ohab.py`，脚本将自动根据数据时间跨度决定切分策略。
+适用于新格式数据（如 `202602~03.tsv`，跨度覆盖 2 月和 3 月）。当前推荐将 `train_ohab.py` 用作 **H/A/B 智能评级主入口**：
 
-**切分策略建议**：
-当数据跨度增加时，建议手动指定切分点以充分利用历史背景。
+- 默认 `--label-mode hab`，仅训练 `H/A/B`
+- `O` 视为已成交/已锁单状态，不进入常规评级桶
+- 训练完成后会在模型目录输出：
+  - `feature_importance.*`
+  - `business_dimension_contribution.*`
+  - `predictions_test.csv`
+  - `hab_bucket_summary.*`
+  - `evaluation_summary.json`
 
-| 数据情况       | 推荐命令                                            | 说明                           |
-| -------------- | --------------------------------------------------- | ------------------------------ |
-| **自动模式**   | `uv run scripts/run.py train_ohab --daemon`         | **推荐：脚本将自动探查并切分** |
-| **2-3 月全量** | `... --train-end 2026-03-15 --valid-end 2026-03-20` | 手动优化长周期数据利用率       |
+**推荐切分策略**：
 
-**执行命令示例**：
+对 `202602~03.tsv` 这类跨月数据，建议固定手动 OOT 切分，保证每次汇报口径一致。
 
 ```bash
-# OHAB 评级 - 统一自适应运行 (支持 2-3 月长周期)
+# 推荐：HAB 评级训练（固定 OOT 口径）
 uv run python scripts/run.py train_ohab --daemon \
     --data-path ./data/202602~03.tsv \
     --preset high_quality \
-    --num-bag-folds 5
+    --num-bag-folds 5 \
+    --label-mode hab \
+    --train-end 2026-03-15 \
+    --valid-end 2026-03-20
 ```
 
-**关键优化**：
-
-- **防泄漏指纹**：脚本会自动记录测试集 ID，确保 `validate_model.py` 的评估结果真实可靠。
-- **自动降级**：若数据不足 14 天，自动退化为随机切分并保留防泄漏标记。
-
-**查看训练状态**：
+**训练完成后查看状态**：
 
 ```bash
-# 查看运行状态
 uv run python scripts/monitor.py status
-
-# 查看日志 (统一使用 train_ohab)
 uv run python scripts/monitor.py log train_ohab -f
+```
+
+### 验证 HAB 结果
+
+训练结束后，直接对同一份数据跑验证脚本。验证脚本会自动读取模型元数据里的：
+
+- `split_info`
+- `label_policy`
+- `label_mode`
+- `decision_policy`
+
+因此不需要手动再指定阈值。
+
+```bash
+uv run python scripts/validate_model.py \
+    --model-path ./outputs/models/ohab_model \
+    --data-path ./data/202602~03.tsv
+```
+
+验证目录默认输出到 `outputs/validation/`，重点关注：
+
+- `evaluation_report.txt`
+- `hab_bucket_summary.csv`
+- `lead_actions.csv`
+- `monotonicity_check.json`
+
+其中：
+
+- `hab_bucket_summary.csv`：看 `H/A/B` 三桶的 14 天到店率、试驾率是否形成单调分层
+- `lead_actions.csv`：可直接给业务看，包含 `预测HAB + 建议SOP + 原因1-3`
+
+### 生成客户版 Markdown 报告
+
+如果要把训练和验证结果整理成面向客户的汇报文档，继续执行：
+
+```bash
+uv run python scripts/generate_business_report.py \
+    --model-dir ./outputs/models/ohab_model \
+    --validation-dir ./outputs/validation \
+    --output-path ./outputs/reports/hab_poc_report.md
+```
+
+### 服务器最短闭环
+
+在服务器上完成一次最短闭环，按下面顺序执行即可：
+
+```bash
+# 1. 拉取最新代码
+git pull origin main
+
+# 2. 训练 HAB 模型
+uv run python scripts/run.py train_ohab --daemon \
+    --data-path ./data/202602~03.tsv \
+    --preset high_quality \
+    --num-bag-folds 5 \
+    --label-mode hab \
+    --train-end 2026-03-15 \
+    --valid-end 2026-03-20
+
+# 3. 验证
+uv run python scripts/validate_model.py \
+    --model-path ./outputs/models/ohab_model \
+    --data-path ./data/202602~03.tsv
+
+# 4. 生成客户版报告
+uv run python scripts/generate_business_report.py \
+    --model-dir ./outputs/models/ohab_model \
+    --validation-dir ./outputs/validation \
+    --output-path ./outputs/reports/hab_poc_report.md
 ```
 
 ---

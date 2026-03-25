@@ -1,5 +1,8 @@
 from pathlib import Path
 
+import pandas as pd
+
+from src.data.adapter import normalize_schema_contract
 from src.data.loader import DataLoader
 
 
@@ -114,3 +117,26 @@ def test_auto_adapt_normalizes_schema_contract_and_preserves_o_level(tmp_path):
     assert df.iloc[0]["历史到店次数"] == "4"
     assert "预算区间_备用" not in df.columns
     assert metadata["schema_contract"]["applied_aliases"]["预算区间_备用"] == "预算区间"
+
+
+def test_normalize_schema_contract_handles_sql_export_aliases():
+    df = pd.DataFrame(
+        {
+            "客户ID(店端)": ["STORE_1"],
+            "手机号（脱敏）": ["13800000000"],
+            "首触意向车型/意向车型": ["铂智3X"],
+            "预算区间(购车预算)": ["15-20万"],
+            "客户是否主动询问购车权益（优惠）": ["是"],
+            "通话时长是否>=45秒": [1],
+        }
+    )
+
+    normalized_df, metadata = normalize_schema_contract(df)
+
+    assert normalized_df.loc[0, "客户ID_店端"] == "STORE_1"
+    assert normalized_df.loc[0, "手机号_脱敏"] == "13800000000"
+    assert normalized_df.loc[0, "首触意向车型"] == "铂智3X"
+    assert normalized_df.loc[0, "预算区间"] == "15-20万"
+    assert normalized_df.loc[0, "客户是否主动询问购车权益"] == "是"
+    assert normalized_df.loc[0, "通话时长是否大于等于45秒"] == 1
+    assert metadata["schema_contract"]["applied_aliases"]["客户ID(店端)"] == "客户ID_店端"

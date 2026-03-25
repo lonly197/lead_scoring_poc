@@ -18,18 +18,28 @@ from datetime import datetime
 from pathlib import Path
 from typing import Iterable
 
+import pandas as pd
+
 # 添加项目根目录到路径
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
 from config.config import config, get_excluded_columns
 from src.data.loader import DataLoader, FeatureEngineer, smart_split_data, split_data_oot_three_way
-from src.data.label_policy import apply_ohab_label_policy, build_ohab_label_policy
+from src.data.label_policy import (
+    apply_ohab_label_policy,
+    build_ohab_label_policy,
+    filter_to_effective_ohab_labels,
+)
 from src.evaluation.ohab_metrics import (
+    apply_hab_decision_policy,
     classification_report_dict,
+    compute_hab_bucket_summary,
     compute_class_ranking_report,
     compute_threshold_report,
     confusion_matrix_frame,
+    check_hab_monotonicity,
+    optimize_hab_decision_policy,
 )
 from src.models.predictor import LeadScoringPredictor
 from src.evaluation.business_logic import calculate_dimension_contribution, BUSINESS_DIMENSION_MAP
@@ -143,6 +153,13 @@ def parse_args():
         default="5,10,20",
         help="多分类排序分析 Top 比例，逗号分隔的百分比值",
     )
+    parser.add_argument(
+        "--label-mode",
+        type=str,
+        default="hab",
+        choices=["hab", "ohab"],
+        help="标签模式：hab=仅输出 H/A/B；ohab=保留 O/H/A/B",
+    )
 
     return parser.parse_args()
 
@@ -216,6 +233,7 @@ def main():
         label_policy = build_ohab_label_policy(
             train_df,
             target_label=target_label,
+            label_mode=args.label_mode,
             o_merge_threshold=args.o_merge_threshold,
             merge_target=args.o_merge_target,
         )
@@ -224,6 +242,9 @@ def main():
         train_df = apply_ohab_label_policy(train_df, target_label, label_policy)
         valid_df = apply_ohab_label_policy(valid_df, target_label, label_policy)
         test_df = apply_ohab_label_policy(test_df, target_label, label_policy)
+        train_df = filter_to_effective_ohab_labels(train_df, target_label, label_policy)
+        valid_df = filter_to_effective_ohab_labels(valid_df, target_label, label_policy)
+        test_df = filter_to_effective_ohab_labels(test_df, target_label, label_policy)
 
         # 3. 特征工程（先 fit 训练集，再 transform 验证/测试集）
         logger.info("步骤 3/6: 特征工程")
@@ -243,6 +264,7 @@ def main():
 
         feature_metadata["split_info"] = split_info
         feature_metadata["label_policy"] = label_policy
+        feature_metadata["label_mode"] = args.label_mode
         feature_metadata["schema_contract"] = adaptation_metadata.get("schema_contract", {})
         feature_metadata["feature_names_version"] = "ohab_schema_contract_v2"
         if adaptation_metadata.get("json_feature_source"):
@@ -279,11 +301,24 @@ def main():
 
         # 5. 模型评估
         logger.info("步骤 5/6: 模型评估与可解释性分析")
-        evaluation_results = predictor.evaluate(test_df)
-        logger.info(f"评估结果: {evaluation_results}")
+        raw_evaluation_results = predictor.evaluate(test_df)
+        logger.info(f"原始评估结果: {raw_evaluation_results}")
+
+        decision_policy = {"strategy": "argmax"}
+        if args.label_mode == "hab" and len(valid_df) > 0:
+            valid_proba = predictor.predict_proba(valid_df).reset_index(drop=True)
+            decision_policy = optimize_hab_decision_policy(
+                valid_df[target_label].reset_index(drop=True),
+                valid_proba,
+            )
+            logger.info(f"验证集阈值策略: {decision_policy}")
+
         y_true = test_df[target_label].reset_index(drop=True)
-        y_pred = predictor.predict(test_df)
         y_proba = predictor.predict_proba(test_df).reset_index(drop=True)
+        if args.label_mode == "hab":
+            y_pred = apply_hab_decision_policy(y_proba, decision_policy)
+        else:
+            y_pred = predictor.predict(test_df)
 
         confusion_df = confusion_matrix_frame(y_true, y_pred)
         classification_dict = classification_report_dict(y_true, y_pred)
@@ -299,6 +334,17 @@ def main():
                 y_proba["B"],
                 positive_label="B",
             )
+        bucket_summary_df = pd.DataFrame()
+        monotonicity_result = {"passed": False, "metric": None, "message": "未启用 HAB 桶验证"}
+        if args.label_mode == "hab":
+            evaluation_frame = test_df.reset_index(drop=True).copy()
+            evaluation_frame["真实标签"] = y_true.values
+            evaluation_frame["预测标签"] = y_pred.values if hasattr(y_pred, "values") else y_pred
+            for column in y_proba.columns:
+                evaluation_frame[f"概率_{column}"] = y_proba[column].values
+            bucket_summary_df = compute_hab_bucket_summary(evaluation_frame, label_column="预测标签")
+            monotonicity_result = check_hab_monotonicity(bucket_summary_df)
+            logger.info(f"HAB 行为分层检查: {monotonicity_result}")
 
         # 计算特征重要性
         logger.info("计算特征重要性...")
@@ -337,6 +383,10 @@ def main():
         confusion_df.to_csv(output_dir / "confusion_matrix.csv", encoding="utf-8-sig")
         _dump_json(output_dir / "classification_report.json", classification_dict)
         _dump_json(output_dir / "class_ranking_report.json", class_ranking_report)
+        if not bucket_summary_df.empty:
+            bucket_summary_df.to_csv(output_dir / "hab_bucket_summary.csv", index=False, encoding="utf-8-sig")
+            _dump_json(output_dir / "hab_bucket_summary.json", bucket_summary_df.to_dict(orient="records"))
+        _dump_json(output_dir / "monotonicity_check.json", monotonicity_result)
 
         if b_threshold_report is not None:
             b_threshold_report.to_csv(output_dir / "b_threshold_report.csv", index=False, encoding="utf-8-sig")
@@ -351,12 +401,19 @@ def main():
         predictions_df.to_csv(output_dir / "predictions_test.csv", index=False, encoding="utf-8-sig")
 
         evaluation_summary = {
-            "metrics": evaluation_results,
+            "metrics": classification_dict,
+            "raw_metrics": raw_evaluation_results,
             "label_policy": label_policy,
+            "label_mode": args.label_mode,
+            "decision_policy": decision_policy,
             "split_info": split_info,
             "top_ratios": list(top_ratios),
+            "monotonicity_check": monotonicity_result,
         }
         _dump_json(output_dir / "evaluation_summary.json", evaluation_summary)
+        feature_metadata["decision_policy"] = decision_policy
+        feature_metadata["label_mode"] = args.label_mode
+        _dump_json(output_dir / "feature_metadata.json", feature_metadata)
             
         # 自动生成 Top-K 列表
         try:
@@ -372,6 +429,8 @@ def main():
         predictor.save(
             extra_metadata={
                 "label_policy": label_policy,
+                "label_mode": args.label_mode,
+                "decision_policy": decision_policy,
                 "schema_contract": feature_metadata.get("schema_contract", {}),
                 "interaction_context": feature_metadata.get("interaction_context", {}),
             }

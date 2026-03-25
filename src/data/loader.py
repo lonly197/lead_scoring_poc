@@ -408,6 +408,34 @@ class FeatureEngineer:
 
             logger.debug(f"创建通话质量特征: 平均通话时长_派生, 有效通话")
 
+        # 5. 语义标签可用性特征
+        semantic_columns = [
+            '客户是否主动询问交车时间',
+            '客户是否主动询问购车权益',
+            '客户是否主动询问金融政策',
+            '客户是否同意加微信',
+            '客户是否表示门店距离太远拒绝到店',
+        ]
+        available_semantic_columns = [col for col in semantic_columns if col in df.columns]
+        if available_semantic_columns:
+            semantic_frame = df[available_semantic_columns].copy()
+            semantic_frame = semantic_frame.replace("", np.nan)
+            df['AI语义标签可用'] = semantic_frame.notna().any(axis=1).astype(int)
+            df['语义标签命中数'] = semantic_frame.apply(
+                lambda row: sum(str(value).strip() == '是' for value in row if pd.notna(value)),
+                axis=1,
+            )
+            new_features.extend(['AI语义标签可用', '语义标签命中数'])
+
+        if '跟进详情_JSON' in df.columns:
+            json_series = df['跟进详情_JSON']
+            df['JSON跟进明细可用'] = (
+                json_series.notna() &
+                json_series.astype(str).str.strip().ne("") &
+                json_series.astype(str).str.strip().ne("{}")
+            ).astype(int)
+            new_features.append('JSON跟进明细可用')
+
         return df, new_features
 
 
