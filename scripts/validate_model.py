@@ -300,6 +300,8 @@ def main():
         print(f"\n✅ 后台任务已启动 (PID: {pid})")
         return
 
+    data_path = args.data_path or config.data.data_path
+
     if args.log_file:
         log_file = Path(args.log_file)
     else:
@@ -314,7 +316,7 @@ def main():
         pid=os.getpid(),
         command=" ".join(sys.argv),
         log_file=str(log_file),
-        data_path=args.data_path or "./data/20260308-v2.csv",
+        data_path=data_path,
         target=args.target,
         output_dir=args.output_dir,
         model_path=args.model_path,
@@ -327,7 +329,7 @@ def main():
     logger.info("=" * 60)
     logger.info(f"评估开始时间: {evaluation_start_time.strftime('%Y-%m-%d %H:%M:%S%z')}")
     logger.info(f"模型路径: {args.model_path}")
-    logger.info(f"数据路径: {args.data_path or './data/20260308-v2.csv'}")
+    logger.info(f"数据路径: {data_path}")
 
     try:
         model_path = Path(args.model_path)
@@ -372,8 +374,6 @@ def main():
         logger.info("\n" + "=" * 60)
         logger.info("加载测试数据")
         logger.info("=" * 60)
-
-        data_path = args.data_path or "./data/20260308-v2.csv"
 
         loader = DataLoader(data_path, auto_adapt=True)
         df = loader.load()

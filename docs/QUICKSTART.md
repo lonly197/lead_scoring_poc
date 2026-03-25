@@ -80,6 +80,39 @@ uv run python scripts/run.py train_ohab --daemon --preset high_quality
   - `evaluation_summary.json`
   - `model_comparison_config.json`
 
+**服务器端最简单闭环**
+
+如果服务器已经按最新 [.env.example](/Users/lpp/workspace/lonly/lead_scoring_poc/.env.example) 部署好 `DATA_PATH` 和 `OHAB_*` 环境变量，那么训练、验证、报告生成三步都可以直接使用默认参数，就能满足 `baseline vs best` 对比需求。
+
+```bash
+# 1. 训练：后台启动 HAB 模型（默认使用 .env 中的 DATA_PATH + server_16g_compare）
+uv run python scripts/run.py train_ohab --daemon
+
+# 2. 查看训练状态 / 跟日志
+uv run python scripts/monitor.py status
+uv run python scripts/monitor.py log train_ohab -f
+
+# 3. 验证：生成 baseline vs best 对比结果
+uv run python scripts/validate_model.py
+
+# 4. 生成客户版 Markdown 报告
+uv run python scripts/generate_business_report.py
+```
+
+这套最短命令默认依赖 `.env` 中的以下关键配置：
+
+- `DATA_PATH=./data/202602~03.tsv`
+- `OHAB_TRAINING_PROFILE=server_16g_compare`
+- `OHAB_ENABLE_MODEL_COMPARISON=true`
+- `OHAB_BASELINE_FAMILY=gbm`
+
+执行完成后，重点检查：
+
+- `outputs/validation/model_comparison.csv`
+- `outputs/validation/predictions_baseline.csv`
+- `outputs/validation/predictions_best.csv`
+- `outputs/reports/hab_poc_report.md`
+
 **推荐切分策略**：
 
 对 `202602~03.tsv` 这类跨月数据，建议固定手动 OOT 切分，保证每次汇报口径一致。
@@ -212,6 +245,8 @@ uv run python scripts/generate_business_report.py \
     --validation-dir ./outputs/validation \
     --output-path ./outputs/reports/hab_poc_report.md
 ```
+
+如果服务器 `.env` 已经配置完成，也可以直接使用上一节的“服务器端最简单闭环”，直接使用默认参数即可。
 
 ---
 
