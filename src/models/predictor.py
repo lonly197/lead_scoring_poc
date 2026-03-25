@@ -26,6 +26,10 @@ class LeadScoringPredictor:
         problem_type: Optional[str] = None,
         sample_weight: Optional[str] = None,
         weight_evaluation: bool = False,
+        # 内存控制参数
+        max_memory_usage_ratio: float = 0.8,
+        excluded_model_types: Optional[List[str]] = None,
+        num_folds_parallel: Optional[int] = None,
     ):
         """
         初始化预测器
@@ -41,6 +45,9 @@ class LeadScoringPredictor:
                 - 'auto_weight': 自动权重策略
                 - str: 指定权重列名
             weight_evaluation: 是否在评估时使用样本权重
+            max_memory_usage_ratio: 最大内存使用比例（默认 0.8，低于 1.0 更安全）
+            excluded_model_types: 排除的模型类型列表（内存密集型：KNN, RF, XT）
+            num_folds_parallel: 并行训练的 fold 数量（None=自动，低内存机器建议 2-3）
         """
         self.label = label
         self.output_path = Path(output_path)
@@ -48,6 +55,9 @@ class LeadScoringPredictor:
         self.problem_type = problem_type
         self.sample_weight = sample_weight
         self.weight_evaluation = weight_evaluation
+        self.max_memory_usage_ratio = max_memory_usage_ratio
+        self.excluded_model_types = excluded_model_types
+        self.num_folds_parallel = num_folds_parallel
 
         self._predictor = None
         self._feature_metadata = None
@@ -223,6 +233,23 @@ class LeadScoringPredictor:
             "verbosity": 2,
             **kwargs,
         }
+
+        # 内存控制参数
+        if self.max_memory_usage_ratio is not None:
+            fit_kwargs["ag_args_fit"] = {
+                "ag.max_memory_usage_ratio": self.max_memory_usage_ratio
+            }
+            logger.info(f"内存使用比例限制: {self.max_memory_usage_ratio}")
+
+        # 排除内存密集型模型
+        if self.excluded_model_types:
+            fit_kwargs["excluded_model_types"] = self.excluded_model_types
+            logger.info(f"排除模型类型: {self.excluded_model_types}")
+
+        # 限制并行 fold 数量
+        if self.num_folds_parallel is not None:
+            fit_kwargs["num_folds_parallel"] = self.num_folds_parallel
+            logger.info(f"并行 fold 数量限制: {self.num_folds_parallel}")
 
         for dataset_name, include_label in (
             ("tuning_data", True),

@@ -234,6 +234,24 @@ def parse_args():
         choices=["gbm", "cat", "xgb", "auto"],
         help="模型对比时的基线家族",
     )
+    # 内存控制参数
+    parser.add_argument(
+        "--max-memory-ratio",
+        type=float,
+        default=0.8,
+        help="最大内存使用比例（默认 0.8，低内存机器建议 0.6-0.8）",
+    )
+    parser.add_argument(
+        "--exclude-memory-heavy-models",
+        action="store_true",
+        help="排除内存密集型模型（KNN, RF, XT）以降低内存使用",
+    )
+    parser.add_argument(
+        "--num-folds-parallel",
+        type=int,
+        default=None,
+        help="并行训练的 fold 数量（默认自动，低内存机器建议 2-3）",
+    )
 
     return parser.parse_args()
 
@@ -353,12 +371,22 @@ def main():
             json.dump(feature_metadata, f, ensure_ascii=False, indent=2)
 
         excluded_columns = get_excluded_columns(target_label)
+
+        # 内存密集型模型排除
+        excluded_model_types = None
+        if args.exclude_memory_heavy_models:
+            excluded_model_types = ["KNN", "RF", "XT"]
+            logger.info("排除内存密集型模型: KNN, RF, XT")
+
         predictor = LeadScoringPredictor(
             label=target_label,
             output_path=str(output_dir),
             eval_metric="log_loss",
             problem_type="multiclass",
             sample_weight="balance_weight",
+            max_memory_usage_ratio=args.max_memory_ratio,
+            excluded_model_types=excluded_model_types,
+            num_folds_parallel=args.num_folds_parallel,
         )
 
         train_kwargs = {

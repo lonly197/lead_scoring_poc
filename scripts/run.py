@@ -111,12 +111,27 @@ def main():
   # 运行试驾预测
   uv run python scripts/run.py train_test_drive --daemon
 
+  # 内存优化模式（低内存服务器推荐）
+  uv run python scripts/run.py train_ohab --daemon \\
+      --preset good_quality \\
+      --num-bag-folds 3 \\
+      --exclude-memory-heavy-models \\
+      --max-memory-ratio 0.7 \\
+      --num-folds-parallel 2
+
 可用任务:
   train_arrive       - 到店预测训练（核心任务）
   train_test_drive   - 试驾预测训练
   train_ohab         - OHAB 评级训练
   train_arrive_oot   - 兼容旧名称，内部转发到 train_arrive
   train_ohab_oot     - 兼容旧名称，内部转发到 train_ohab
+
+内存优化提示:
+  1. 使用 good_quality 或 medium_quality 替代 high_quality
+  2. 降低 --num-bag-folds（5→3 或 0）
+  3. 添加 --exclude-memory-heavy-models 排除 KNN/RF/XT
+  4. 使用 --num-folds-parallel 2 限制并行度
+  5. 调整 --max-memory-ratio 0.6-0.8（默认 0.8）
         """,
     )
 
@@ -194,6 +209,24 @@ def main():
         choices=["gbm", "cat", "xgb", "auto"],
         help="基线模型家族（train_ohab 专用）",
     )
+    # 内存控制参数
+    parser.add_argument(
+        "--max-memory-ratio",
+        type=float,
+        default=0.8,
+        help="最大内存使用比例（默认 0.8，低内存机器建议 0.6-0.8）",
+    )
+    parser.add_argument(
+        "--exclude-memory-heavy-models",
+        action="store_true",
+        help="排除内存密集型模型（KNN, RF, XT）以降低内存使用",
+    )
+    parser.add_argument(
+        "--num-folds-parallel",
+        type=int,
+        default=None,
+        help="并行训练的 fold 数量（默认自动，低内存机器建议 2-3）",
+    )
 
     args = parser.parse_args()
 
@@ -242,6 +275,13 @@ def main():
         pass_args.append("--enable-model-comparison")
     if args.baseline_family:
         pass_args.extend(["--baseline-family", args.baseline_family])
+    # 内存控制参数
+    if args.max_memory_ratio:
+        pass_args.extend(["--max-memory-ratio", str(args.max_memory_ratio)])
+    if args.exclude_memory_heavy_models:
+        pass_args.append("--exclude-memory-heavy-models")
+    if args.num_folds_parallel is not None:
+        pass_args.extend(["--num-folds-parallel", str(args.num_folds_parallel)])
 
     # 运行
     if args.daemon:
