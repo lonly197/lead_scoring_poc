@@ -287,10 +287,37 @@ class LeadScoringPredictor:
 
         self._configure_bagging_holdout(fit_kwargs)
 
+        # 添加进度监控回调
+        callbacks = fit_kwargs.pop("callbacks", None)
+        if callbacks is None:
+            callbacks = []
+        if not any(hasattr(cb, '__class__') and 'Progress' in cb.__class__.__name__ for cb in callbacks):
+            try:
+                from src.training.progress_callback import TrainingProgressCallback
+                progress_callback = TrainingProgressCallback(time_limit=time_limit)
+                callbacks.append(progress_callback)
+                logger.info("已启用训练进度监控")
+            except ImportError:
+                logger.debug("进度监控模块未找到，跳过")
+
+        fit_kwargs["callbacks"] = callbacks
+
         # 训练
         self._predictor.fit(train_data, **fit_kwargs)
 
         logger.info("模型训练完成")
+
+        # 输出训练摘要
+        for cb in callbacks:
+            if hasattr(cb, 'get_summary'):
+                summary = cb.get_summary()
+                if summary.get("best_model"):
+                    logger.info(
+                        f"训练摘要: 共训练 {summary['total_models_trained']} 个模型, "
+                        f"最佳模型: {summary['best_model']}, "
+                        f"分数: {summary['best_score']:.4f}, "
+                        f"总耗时: {summary['total_time_formatted']}"
+                    )
 
         return self
 
