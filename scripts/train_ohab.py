@@ -76,6 +76,68 @@ def _dump_json(path: Path, payload: dict | list) -> None:
         json.dump(payload, f, ensure_ascii=False, indent=2, default=str)
 
 
+def _candidate_prefixes_for_family(family: str) -> tuple[str, ...]:
+    family = family.lower()
+    if family == "gbm":
+        return ("LightGBM", "LightGBMXT", "LightGBMLarge")
+    if family == "cat":
+        return ("CatBoost",)
+    if family == "xgb":
+        return ("XGBoost",)
+    return ()
+
+
+def _select_baseline_model_from_leaderboard(leaderboard_df: pd.DataFrame, family: str) -> dict:
+    non_ensemble_df = leaderboard_df[
+        ~leaderboard_df["model"].astype(str).str.startswith("WeightedEnsemble")
+    ].copy()
+    if non_ensemble_df.empty:
+        raise ValueError("leaderboard 中未找到可用的非集成子模型")
+
+    candidate_df = pd.DataFrame()
+    for prefix in _candidate_prefixes_for_family(family):
+        candidate_df = non_ensemble_df[
+            non_ensemble_df["model"].astype(str).str.startswith(prefix)
+        ].copy()
+        if not candidate_df.empty:
+            break
+
+    fallback_reason = ""
+    if candidate_df.empty:
+        candidate_df = non_ensemble_df.copy()
+        fallback_reason = "requested_family_not_found"
+
+    ranking_column = "score_test" if "score_test" in candidate_df.columns else "score_val"
+    candidate_df = candidate_df.sort_values(ranking_column, ascending=False)
+    baseline_row = candidate_df.iloc[0]
+
+    return {
+        "baseline_family_requested": family,
+        "baseline_model_name": str(baseline_row["model"]),
+        "selection_metric": ranking_column,
+        "selection_score": float(baseline_row[ranking_column]),
+        "fallback_reason": fallback_reason,
+    }
+
+
+def _build_model_decision_policy(
+    predictor: LeadScoringPredictor,
+    dataset: pd.DataFrame,
+    target_label: str,
+    label_mode: str,
+    model_name: str,
+) -> dict:
+    if label_mode != "hab" or len(dataset) == 0:
+        return {"strategy": "argmax"}
+    valid_proba = predictor.predict_proba(dataset, model=model_name).reset_index(drop=True)
+    decision_policy = optimize_hab_decision_policy(
+        dataset[target_label].reset_index(drop=True),
+        valid_proba,
+    )
+    decision_policy["model_name"] = model_name
+    return decision_policy
+
+
 def parse_args():
     """解析命令行参数"""
     parser = argparse.ArgumentParser(description="OHAB 评级模型训练 (自适应版)")
@@ -159,6 +221,18 @@ def parse_args():
         default="hab",
         choices=["hab", "ohab"],
         help="标签模式：hab=仅输出 H/A/B；ohab=保留 O/H/A/B",
+    )
+    parser.add_argument(
+        "--enable-model-comparison",
+        action="store_true",
+        help="保留基线子模型并输出 baseline vs best 的对比配置",
+    )
+    parser.add_argument(
+        "--baseline-family",
+        type=str,
+        default="gbm",
+        choices=["gbm", "cat", "xgb", "auto"],
+        help="模型对比时的基线家族",
     )
 
     return parser.parse_args()
@@ -298,6 +372,45 @@ def main():
             train_kwargs["tuning_data"] = valid_df
 
         predictor.train(**train_kwargs)
+        best_model_name = predictor.get_model_info().get("best_model")
+        comparison_config = {
+            "enabled": False,
+            "baseline_family_requested": args.baseline_family,
+            "best_model_name": best_model_name,
+            "baseline_model_name": None,
+            "models": {},
+        }
+
+        if args.enable_model_comparison and len(valid_df) > 0:
+            valid_leaderboard_df = predictor.get_leaderboard(valid_df, silent=True)
+            valid_leaderboard_df.to_csv(output_dir / "leaderboard_valid.csv", index=False, encoding="utf-8-sig")
+            baseline_selection = _select_baseline_model_from_leaderboard(valid_leaderboard_df, args.baseline_family)
+            baseline_model_name = baseline_selection["baseline_model_name"]
+            comparison_config.update(
+                {
+                    "enabled": True,
+                    "baseline_model_name": baseline_model_name,
+                    "baseline_selection": baseline_selection,
+                    "comparison_model_names": list(dict.fromkeys([baseline_model_name, best_model_name])),
+                }
+            )
+            for model_name, role in [
+                (baseline_model_name, "baseline"),
+                (best_model_name, "best"),
+            ]:
+                comparison_config["models"][model_name] = {
+                    "role": role,
+                    "decision_policy": _build_model_decision_policy(
+                        predictor=predictor,
+                        dataset=valid_df,
+                        target_label=target_label,
+                        label_mode=args.label_mode,
+                        model_name=model_name,
+                    ),
+                }
+            logger.info(f"模型对比配置: {comparison_config}")
+        elif args.enable_model_comparison:
+            logger.warning("启用了模型对比，但验证集为空，跳过 baseline 配置生成")
 
         # 5. 模型评估
         logger.info("步骤 5/6: 模型评估与可解释性分析")
@@ -305,7 +418,9 @@ def main():
         logger.info(f"原始评估结果: {raw_evaluation_results}")
 
         decision_policy = {"strategy": "argmax"}
-        if args.label_mode == "hab" and len(valid_df) > 0:
+        if comparison_config["enabled"]:
+            decision_policy = comparison_config["models"][best_model_name]["decision_policy"]
+        elif args.label_mode == "hab" and len(valid_df) > 0:
             valid_proba = predictor.predict_proba(valid_df).reset_index(drop=True)
             decision_policy = optimize_hab_decision_policy(
                 valid_df[target_label].reset_index(drop=True),
@@ -314,11 +429,11 @@ def main():
             logger.info(f"验证集阈值策略: {decision_policy}")
 
         y_true = test_df[target_label].reset_index(drop=True)
-        y_proba = predictor.predict_proba(test_df).reset_index(drop=True)
+        y_proba = predictor.predict_proba(test_df, model=best_model_name).reset_index(drop=True)
         if args.label_mode == "hab":
             y_pred = apply_hab_decision_policy(y_proba, decision_policy)
         else:
-            y_pred = predictor.predict(test_df)
+            y_pred = predictor.predict(test_df, model=best_model_name)
 
         confusion_df = confusion_matrix_frame(y_true, y_pred)
         classification_dict = classification_report_dict(y_true, y_pred)
@@ -406,6 +521,7 @@ def main():
             "label_policy": label_policy,
             "label_mode": args.label_mode,
             "decision_policy": decision_policy,
+            "model_comparison": comparison_config,
             "split_info": split_info,
             "top_ratios": list(top_ratios),
             "monotonicity_check": monotonicity_result,
@@ -413,7 +529,9 @@ def main():
         _dump_json(output_dir / "evaluation_summary.json", evaluation_summary)
         feature_metadata["decision_policy"] = decision_policy
         feature_metadata["label_mode"] = args.label_mode
+        feature_metadata["model_comparison"] = comparison_config
         _dump_json(output_dir / "feature_metadata.json", feature_metadata)
+        _dump_json(output_dir / "model_comparison_config.json", comparison_config)
             
         # 自动生成 Top-K 列表
         try:
@@ -431,11 +549,18 @@ def main():
                 "label_policy": label_policy,
                 "label_mode": args.label_mode,
                 "decision_policy": decision_policy,
+                "model_comparison": comparison_config,
                 "schema_contract": feature_metadata.get("schema_contract", {}),
                 "interaction_context": feature_metadata.get("interaction_context", {}),
             }
         )
-        predictor.cleanup(keep_best_only=True)
+        if comparison_config["enabled"]:
+            predictor.cleanup(
+                keep_best_only=False,
+                keep_model_names=comparison_config.get("comparison_model_names"),
+            )
+        else:
+            predictor.cleanup(keep_best_only=True)
 
         # 计算并输出训练耗时
         train_end_time = get_local_now()

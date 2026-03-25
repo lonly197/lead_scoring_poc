@@ -13,6 +13,7 @@
 - **🚀 智能自适应切分**：脚本自动探查数据时间跨度。跨度充足时自动执行 OOT（Out-of-Time）时间切分；跨度不足时（如单日快照）自动退化为分层随机切分。
 - **🛡️ 全链路防泄漏**：在随机切分降级模式下，脚本自动提取“防泄漏指纹”（测试集 ID），强制 `validate_model.py` 仅评估从未见过的数据，确保指标真实。
 - **🚿 特征脱水技术**：内置严格的后验特征排除机制，彻底杜绝模型“偷看答案”的行为。
+- **⚖️ 基线模型对比**：可保留 AutoGluon 内部单模型子模型（如 `LightGBM`）作为基线，并与最优模型在同一 OOT 测试集上做对比输出。
 
 ## 快速开始
 
@@ -22,14 +23,27 @@
 # 安装依赖
 uv sync && cp .env.example .env
 
-# 到店预测训练 (统一智能自适应版)
-uv run python scripts/train_arrive.py --data-path ./data/202602_03.csv
+# HAB 评级训练（带 baseline vs best 对比）
+uv run python scripts/run.py train_ohab --daemon \
+  --data-path ./data/202602~03.tsv \
+  --preset high_quality \
+  --num-bag-folds 5 \
+  --label-mode hab \
+  --enable-model-comparison \
+  --baseline-family gbm \
+  --train-end 2026-03-15 \
+  --valid-end 2026-03-20
 
-# OHAB 评级训练 (统一智能自适应版)
-uv run python scripts/train_ohab.py --data-path ./data/202602_03.csv
+# 验证模型（自动输出 baseline / best 双结果）
+uv run python scripts/validate_model.py \
+  --model-path ./outputs/models/ohab_model \
+  --data-path ./data/202602~03.tsv
 
-# 验证模型 (防泄漏指纹自动识别)
-uv run python scripts/validate_model.py --model-path ./outputs/models/ohab_model
+# 生成客户版报告（首页展示基线 vs 最优模型）
+uv run python scripts/generate_business_report.py \
+  --model-dir ./outputs/models/ohab_model \
+  --validation-dir ./outputs/validation \
+  --output-path ./outputs/reports/hab_poc_report.md
 ```
 
 ### 服务端运行注意事项

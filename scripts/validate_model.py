@@ -53,6 +53,27 @@ def dump_json(path: Path, payload: dict | list) -> None:
 
 logger = logging.getLogger(__name__)
 FINAL_ORDERED_COLUMN = "is_final_ordered"
+ROLE_DISPLAY = {
+    "baseline": "基线模型",
+    "best": "最优模型",
+}
+
+
+def run_model_predictions(
+    predictor,
+    data: pd.DataFrame,
+    label_mode: str,
+    decision_policy: dict,
+    model_name: str | None = None,
+) -> tuple[pd.Series, pd.DataFrame]:
+    """执行指定模型预测并应用 HAB 决策层。"""
+    raw_pred = predictor.predict(data, model=model_name) if model_name else predictor.predict(data)
+    y_proba = predictor.predict_proba(data, model=model_name) if model_name else predictor.predict_proba(data)
+    if label_mode == "hab":
+        y_pred = apply_hab_decision_policy(y_proba, decision_policy)
+    else:
+        y_pred = raw_pred
+    return y_pred, y_proba
 
 
 def parse_args():
@@ -220,6 +241,7 @@ def main():
     label_mode = metadata.get("label_mode", "ohab")
     interaction_context = metadata.get("interaction_context", {})
     decision_policy = metadata.get("decision_policy", {"strategy": "argmax"})
+    comparison_config = metadata.get("model_comparison", {"enabled": False})
     
     if split_info:
         logger.info(f"读取到模型切分元数据，模式: {split_info.get('mode')}")
@@ -319,23 +341,9 @@ def main():
     # 保存目标值用于评估
     y_true = df_processed[target].values
 
-    # 3. 预测
+    # 3. 预测与评估
     logger.info("\n" + "=" * 60)
-    logger.info("执行预测")
-    logger.info("=" * 60)
-
-    raw_pred = predictor.predict(df_processed)
-    y_proba = predictor.predict_proba(df_processed)
-    if label_mode == "hab":
-        y_pred = apply_hab_decision_policy(y_proba, decision_policy)
-    else:
-        y_pred = raw_pred
-
-    logger.info(f"预测完成: {len(y_pred)} 个样本")
-
-    # 4. 评估
-    logger.info("\n" + "=" * 60)
-    logger.info("评估结果")
+    logger.info("执行预测与评估")
     logger.info("=" * 60)
 
     from sklearn.metrics import (
@@ -346,124 +354,175 @@ def main():
         matthews_corrcoef,
     )
 
-    accuracy = accuracy_score(y_true, y_pred)
-    balanced_acc = balanced_accuracy_score(y_true, y_pred)
-    mcc = matthews_corrcoef(y_true, y_pred)
-
-    logger.info(f"Accuracy: {accuracy:.4f}")
-    logger.info(f"Balanced Accuracy: {balanced_acc:.4f}")
-    logger.info(f"MCC: {mcc:.4f}")
-
-    # 混淆矩阵
-    cm = confusion_matrix(y_true, y_pred)
-    logger.info(f"\n混淆矩阵:\n{cm}")
-
-    report = classification_report(y_true, y_pred)
-    logger.info(f"\n分类报告:\n{report}")
-    confusion_df = confusion_matrix_frame(y_true, y_pred)
-    classification_dict = classification_report_dict(y_true, y_pred)
-    class_ranking_report = compute_class_ranking_report(y_true, y_proba, top_ratios=top_ratios)
-    b_threshold_report = None
-    if "B" in y_proba.columns:
-        b_threshold_report = compute_threshold_report(y_true, y_proba["B"], positive_label="B")
-
-    # 5. 按类别分析
-    logger.info("\n" + "=" * 60)
-    logger.info("各类别详细分析")
-    logger.info("=" * 60)
-
-    classes = df_processed[target].unique()
-    for cls in sorted(classes):
-        mask = y_true == cls
-        correct = (y_pred[mask] == cls).sum()
-        total = mask.sum()
-        acc = correct / total if total > 0 else 0
-        logger.info(f"类别 {cls}: {correct}/{total} 正确 ({acc:.1%})")
-
-    # 6. 保存结果
-    logger.info("\n" + "=" * 60)
-    logger.info("保存结果")
-    logger.info("=" * 60)
-
-    # 预测结果
-    results_df = pd.DataFrame({
-        "真实标签": y_true,
-        "预测标签": y_pred.values if hasattr(y_pred, "values") else y_pred,
-    })
-
-    if final_ordered is not None:
-        final_ordered = final_ordered.loc[df_processed.index].fillna(0).astype(int)
-        results_df["实际下定"] = final_ordered.values
-
-    # 添加概率
-    for col in y_proba.columns:
-        results_df[f"概率_{col}"] = y_proba[col].values
-
-    results_path = output_dir / "predictions.csv"
-    results_df.to_csv(results_path, index=False, encoding="utf-8-sig")
-    logger.info(f"预测结果已保存: {results_path}")
-
-    bucket_summary_df = pd.DataFrame()
-    monotonicity_result = {"passed": False, "metric": None, "message": "未启用 HAB 桶验证"}
-    lead_actions_df = pd.DataFrame()
-    if label_mode == "hab":
-        bucket_input_df = pd.DataFrame({
-            "预测标签": y_pred.values if hasattr(y_pred, "values") else y_pred,
-            "真实标签": y_true,
-        })
-        for metric_column in [
-            "到店标签_7天",
-            "到店标签_14天",
-            "到店标签_30天",
-            "试驾标签_7天",
-            "试驾标签_14天",
-            "试驾标签_30天",
-            FINAL_ORDERED_COLUMN,
-        ]:
-            if metric_column in business_metric_frame.columns:
-                bucket_input_df[metric_column] = business_metric_frame.loc[df_processed.index, metric_column].values
-        bucket_summary_df = compute_hab_bucket_summary(bucket_input_df, label_column="预测标签")
-        monotonicity_result = check_hab_monotonicity(bucket_summary_df)
-        if not bucket_summary_df.empty:
-            bucket_summary_df.to_csv(output_dir / "hab_bucket_summary.csv", index=False, encoding="utf-8-sig")
-            dump_json(output_dir / "hab_bucket_summary.json", bucket_summary_df.to_dict(orient="records"))
-            dump_json(output_dir / "monotonicity_check.json", monotonicity_result)
-
-        lead_action_rows = []
-        for idx, row in df_processed.reset_index(drop=True).iterrows():
-            probability_map = {label: float(y_proba.iloc[idx].get(label, 0.0)) for label in y_proba.columns}
-            lead_action_rows.append(
-                build_lead_action_record(
-                    row=row,
-                    predicted_label=str(y_pred.iloc[idx] if hasattr(y_pred, "iloc") else y_pred[idx]),
-                    probability_map=probability_map,
-                )
+    if comparison_config.get("enabled") and comparison_config.get("models"):
+        model_specs = list(comparison_config["models"].items())
+    else:
+        model_specs = [
+            (
+                predictor.model_best,
+                {
+                    "role": "best",
+                    "decision_policy": decision_policy,
+                },
             )
-        lead_actions_df = pd.DataFrame(lead_action_rows)
-        if not lead_actions_df.empty:
-            lead_actions_df.to_csv(output_dir / "lead_actions.csv", index=False, encoding="utf-8-sig")
+        ]
 
-    confusion_df.to_csv(output_dir / "confusion_matrix.csv", encoding="utf-8-sig")
-    dump_json(output_dir / "classification_report.json", classification_dict)
-    dump_json(output_dir / "class_ranking_report.json", class_ranking_report)
-    if b_threshold_report is not None:
-        b_threshold_report.to_csv(output_dir / "b_threshold_report.csv", index=False, encoding="utf-8-sig")
+    comparison_rows = []
+    per_model_outputs = {}
+
+    for model_name, model_cfg in model_specs:
+        role = model_cfg.get("role", model_name)
+        current_policy = model_cfg.get("decision_policy", decision_policy)
+        y_pred, y_proba = run_model_predictions(
+            predictor=predictor,
+            data=df_processed,
+            label_mode=label_mode,
+            decision_policy=current_policy,
+            model_name=model_name,
+        )
+
+        accuracy = accuracy_score(y_true, y_pred)
+        balanced_acc = balanced_accuracy_score(y_true, y_pred)
+        mcc = matthews_corrcoef(y_true, y_pred)
+        cm = confusion_matrix(y_true, y_pred)
+        report = classification_report(y_true, y_pred)
+        confusion_df = confusion_matrix_frame(y_true, y_pred)
+        classification_dict = classification_report_dict(y_true, y_pred)
+        class_ranking_report = compute_class_ranking_report(y_true, y_proba, top_ratios=top_ratios)
+        b_threshold_report = None
+        if "B" in y_proba.columns:
+            b_threshold_report = compute_threshold_report(y_true, y_proba["B"], positive_label="B")
+
+        results_df = pd.DataFrame({
+            "真实标签": y_true,
+            "预测标签": y_pred.values if hasattr(y_pred, "values") else y_pred,
+        })
+        if final_ordered is not None:
+            final_ordered = final_ordered.loc[df_processed.index].fillna(0).astype(int)
+            results_df["实际下定"] = final_ordered.values
+        for col in y_proba.columns:
+            results_df[f"概率_{col}"] = y_proba[col].values
+
+        bucket_summary_df = pd.DataFrame()
+        monotonicity_result = {"passed": False, "metric": None, "message": "未启用 HAB 桶验证"}
+        lead_actions_df = pd.DataFrame()
+        if label_mode == "hab":
+            bucket_input_df = pd.DataFrame({
+                "预测标签": y_pred.values if hasattr(y_pred, "values") else y_pred,
+                "真实标签": y_true,
+            })
+            for metric_column in business_metric_columns:
+                if metric_column in business_metric_frame.columns:
+                    bucket_input_df[metric_column] = business_metric_frame.loc[df_processed.index, metric_column].values
+            bucket_summary_df = compute_hab_bucket_summary(bucket_input_df, label_column="预测标签")
+            monotonicity_result = check_hab_monotonicity(bucket_summary_df)
+
+            lead_action_rows = []
+            for idx, row in df_processed.reset_index(drop=True).iterrows():
+                probability_map = {label: float(y_proba.iloc[idx].get(label, 0.0)) for label in y_proba.columns}
+                lead_action_rows.append(
+                    build_lead_action_record(
+                        row=row,
+                        predicted_label=str(y_pred.iloc[idx] if hasattr(y_pred, "iloc") else y_pred[idx]),
+                        probability_map=probability_map,
+                    )
+                )
+            lead_actions_df = pd.DataFrame(lead_action_rows)
+
+        suffix = role
+        results_df.to_csv(output_dir / f"predictions_{suffix}.csv", index=False, encoding="utf-8-sig")
+        confusion_df.to_csv(output_dir / f"confusion_matrix_{suffix}.csv", encoding="utf-8-sig")
+        dump_json(output_dir / f"classification_report_{suffix}.json", classification_dict)
+        dump_json(output_dir / f"class_ranking_report_{suffix}.json", class_ranking_report)
+        if b_threshold_report is not None:
+            b_threshold_report.to_csv(output_dir / f"b_threshold_report_{suffix}.csv", index=False, encoding="utf-8-sig")
+        if not bucket_summary_df.empty:
+            bucket_summary_df.to_csv(output_dir / f"hab_bucket_summary_{suffix}.csv", index=False, encoding="utf-8-sig")
+            dump_json(output_dir / f"hab_bucket_summary_{suffix}.json", bucket_summary_df.to_dict(orient="records"))
+            dump_json(output_dir / f"monotonicity_check_{suffix}.json", monotonicity_result)
+        if not lead_actions_df.empty:
+            lead_actions_df.to_csv(output_dir / f"lead_actions_{suffix}.csv", index=False, encoding="utf-8-sig")
+
+        comparison_row = {
+            "model_name": model_name,
+            "role": role,
+            "模型角色": ROLE_DISPLAY.get(role, role),
+            "accuracy": float(accuracy),
+            "balanced_accuracy": float(balanced_acc),
+            "mcc": float(mcc),
+            "macro_f1": float(classification_dict.get("macro avg", {}).get("f1-score", 0.0)),
+            "b_recall": float(classification_dict.get("B", {}).get("recall", 0.0)),
+            "monotonicity_passed": bool(monotonicity_result.get("passed", False)),
+            "monotonicity_metric": monotonicity_result.get("metric"),
+        }
+        if not bucket_summary_df.empty:
+            for bucket in ["H", "A", "B"]:
+                bucket_slice = bucket_summary_df[bucket_summary_df["bucket"] == bucket]
+                if not bucket_slice.empty:
+                    comparison_row[f"{bucket.lower()}_arrive_14d_rate"] = float(bucket_slice.iloc[0].get("到店标签_14天_rate", 0.0))
+                    comparison_row[f"{bucket.lower()}_drive_14d_rate"] = float(bucket_slice.iloc[0].get("试驾标签_14天_rate", 0.0))
+        comparison_rows.append(comparison_row)
+        per_model_outputs[role] = {
+            "model_name": model_name,
+            "decision_policy": current_policy,
+            "results_df": results_df,
+            "confusion_df": confusion_df,
+            "classification_dict": classification_dict,
+            "class_ranking_report": class_ranking_report,
+            "bucket_summary_df": bucket_summary_df,
+            "monotonicity_result": monotonicity_result,
+            "lead_actions_df": lead_actions_df,
+            "report": report,
+            "cm": cm,
+        }
+
+    comparison_df = pd.DataFrame(comparison_rows)
+    if not comparison_df.empty:
+        baseline_rows = comparison_df[comparison_df["role"] == "baseline"]
+        if not baseline_rows.empty:
+            baseline_row = baseline_rows.iloc[0]
+            for metric in [
+                "accuracy",
+                "balanced_accuracy",
+                "mcc",
+                "macro_f1",
+                "b_recall",
+            ]:
+                comparison_df[f"delta_vs_baseline_{metric}"] = comparison_df[metric] - float(baseline_row[metric])
+        comparison_df.to_csv(output_dir / "model_comparison.csv", index=False, encoding="utf-8-sig")
+        dump_json(output_dir / "model_comparison.json", comparison_df.to_dict(orient="records"))
+
+    primary_role = "best" if "best" in per_model_outputs else next(iter(per_model_outputs))
+    primary_output = per_model_outputs[primary_role]
+
+    primary_output["results_df"].to_csv(output_dir / "predictions.csv", index=False, encoding="utf-8-sig")
+    primary_output["confusion_df"].to_csv(output_dir / "confusion_matrix.csv", encoding="utf-8-sig")
+    dump_json(output_dir / "classification_report.json", primary_output["classification_dict"])
+    dump_json(output_dir / "class_ranking_report.json", primary_output["class_ranking_report"])
+    if not primary_output["bucket_summary_df"].empty:
+        primary_output["bucket_summary_df"].to_csv(output_dir / "hab_bucket_summary.csv", index=False, encoding="utf-8-sig")
+        dump_json(output_dir / "hab_bucket_summary.json", primary_output["bucket_summary_df"].to_dict(orient="records"))
+        dump_json(output_dir / "monotonicity_check.json", primary_output["monotonicity_result"])
+    if not primary_output["lead_actions_df"].empty:
+        primary_output["lead_actions_df"].to_csv(output_dir / "lead_actions.csv", index=False, encoding="utf-8-sig")
+
     dump_json(
         output_dir / "evaluation_summary.json",
         {
-            "accuracy": accuracy,
-            "balanced_accuracy": balanced_acc,
-            "mcc": mcc,
+            "accuracy": comparison_df.loc[comparison_df["role"] == primary_role, "accuracy"].iloc[0],
+            "balanced_accuracy": comparison_df.loc[comparison_df["role"] == primary_role, "balanced_accuracy"].iloc[0],
+            "mcc": comparison_df.loc[comparison_df["role"] == primary_role, "mcc"].iloc[0],
             "label_policy": label_policy,
             "label_mode": label_mode,
-            "decision_policy": decision_policy,
+            "decision_policy": per_model_outputs[primary_role]["decision_policy"],
             "split_info": split_info,
             "top_ratios": list(top_ratios),
-            "monotonicity_check": monotonicity_result,
+            "monotonicity_check": primary_output["monotonicity_result"],
+            "model_comparison": comparison_config,
+            "comparison_rows": comparison_df.to_dict(orient="records"),
         },
     )
 
-    # 评估报告
     report_path = output_dir / "evaluation_report.txt"
     with open(report_path, "w", encoding="utf-8") as f:
         f.write("OHAB 模型评估报告\n")
@@ -472,70 +531,48 @@ def main():
         f.write(f"数据路径: {data_path}\n")
         f.write(f"样本数量: {len(y_true)}\n")
         f.write(f"最佳模型: {predictor.model_best}\n\n")
-        f.write("评估指标\n")
+        if not comparison_df.empty and len(comparison_df) > 1:
+            f.write("模型对比\n")
+            f.write("-" * 40 + "\n")
+            for row in comparison_df.to_dict(orient="records"):
+                f.write(
+                    f"{ROLE_DISPLAY.get(row['role'], row['role'])}（{row['model_name']}）: "
+                    f"平衡准确率 Balanced Accuracy={row['balanced_accuracy']:.4f}, "
+                    f"宏平均 F1 Macro F1={row['macro_f1']:.4f}, "
+                    f"B 类召回率 B Recall={row['b_recall']:.4f}\n"
+                )
+            f.write("\n")
+
+        f.write("主模型评估指标\n")
         f.write("-" * 40 + "\n")
-        f.write(f"Accuracy: {accuracy:.4f}\n")
-        f.write(f"Balanced Accuracy: {balanced_acc:.4f}\n")
-        f.write(f"MCC: {mcc:.4f}\n\n")
+        f.write(f"准确率 Accuracy: {comparison_df.loc[comparison_df['role'] == primary_role, 'accuracy'].iloc[0]:.4f}\n")
+        f.write(f"平衡准确率 Balanced Accuracy: {comparison_df.loc[comparison_df['role'] == primary_role, 'balanced_accuracy'].iloc[0]:.4f}\n")
+        f.write(f"马修斯相关系数 MCC: {comparison_df.loc[comparison_df['role'] == primary_role, 'mcc'].iloc[0]:.4f}\n\n")
         if label_mode == "hab":
-            f.write(f"Label Mode: {label_mode}\n")
-            f.write(f"Decision Policy: {json.dumps(decision_policy, ensure_ascii=False)}\n\n")
+            f.write(f"标签模式: {label_mode}\n")
+            f.write(f"决策策略: {json.dumps(primary_output['decision_policy'], ensure_ascii=False)}\n\n")
         f.write("混淆矩阵\n")
         f.write("-" * 40 + "\n")
-        f.write(f"{cm}\n\n")
+        f.write(f"{primary_output['cm']}\n\n")
         f.write("分类报告\n")
         f.write("-" * 40 + "\n")
-        f.write(report)
-        if not bucket_summary_df.empty:
+        f.write(primary_output["report"])
+        if not primary_output["bucket_summary_df"].empty:
             f.write("\n\nHAB 桶业务表现\n")
             f.write("-" * 40 + "\n")
-            for line in build_bucket_summary_text(bucket_summary_df.to_dict(orient="records")):
+            for line in build_bucket_summary_text(primary_output["bucket_summary_df"].to_dict(orient="records")):
                 f.write(f"- {line}\n")
-            f.write(f"\n单调性检查: {monotonicity_result.get('message')}\n")
-
-        # === 追加业务转化漏斗验证 (终态 O 验证) ===
-        if final_ordered is not None:
-            f.write("\n\n" + "=" * 60 + "\n")
-            f.write("🎯 业务转化效果验证 (AI 评级 vs 最终下定)\n")
-            f.write("=" * 60 + "\n")
-            f.write("模型预测出的各级别线索中，最终实际下定 (O级) 的转化率对比：\n\n")
-            
-            print("\n" + "=" * 60)
-            print("🎯 业务转化效果验证 (AI 评级 vs 最终下定)")
-            print("=" * 60)
-            
-            # 使用预测标签和实际隔离标签做聚合
-            final_df = pd.DataFrame({
-                "predicted_level": y_pred,
-                "is_ordered": final_ordered.values,
-            })
-            
-            # 按 H, A, B 的顺序输出
-            for level in ["H", "A", "B"]:
-                subset = final_df[final_df["predicted_level"] == level]
-                count_total = len(subset)
-                if count_total > 0:
-                    count_ordered = subset["is_ordered"].sum()
-                    conversion_rate = count_ordered / count_total
-                    
-                    report_chunk = (
-                        f"【AI 预测为 {level} 级 的线索】\n"
-                        f"- 命中人数: {count_total} 人\n"
-                        f"- 实际下定人数: {count_ordered} 人\n"
-                        f"- 下定转化率: {conversion_rate:.2%}\n\n"
-                    )
-                    f.write(report_chunk)
-                    print(report_chunk.strip())
+            f.write(f"\n单调性检查: {primary_output['monotonicity_result'].get('message')}\n")
 
     logger.info(f"评估报告已保存: {report_path}")
 
-    # 打印总结
     print("\n" + "=" * 60)
     print("验证完成")
     print("=" * 60)
-    print(f"Accuracy: {accuracy:.4f}")
-    print(f"Balanced Accuracy: {balanced_acc:.4f}")
-    print(f"MCC: {mcc:.4f}")
+    primary_row = comparison_df[comparison_df["role"] == primary_role].iloc[0]
+    print(f"准确率 Accuracy: {primary_row['accuracy']:.4f}")
+    print(f"平衡准确率 Balanced Accuracy: {primary_row['balanced_accuracy']:.4f}")
+    print(f"马修斯相关系数 MCC: {primary_row['mcc']:.4f}")
     print(f"\n结果保存在: {output_dir}")
 
 

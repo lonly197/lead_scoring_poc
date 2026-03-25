@@ -22,6 +22,9 @@ class FakeTabularPredictor:
         self.last_predict_proba_columns = None
         self.last_evaluate_columns = None
         self.last_feature_importance_columns = None
+        self.last_predict_model = None
+        self.last_predict_proba_model = None
+        self.last_delete_models = None
         self.fit_train_columns = None
         self.fit_tuning_columns = None
         self.fit_kwargs = None
@@ -34,12 +37,14 @@ class FakeTabularPredictor:
         self.fit_kwargs = kwargs
         return self
 
-    def predict(self, data):
+    def predict(self, data, model=None):
         self.last_predict_columns = list(data.columns)
+        self.last_predict_model = model
         return pd.Series([0] * len(data))
 
-    def predict_proba(self, data):
+    def predict_proba(self, data, model=None):
         self.last_predict_proba_columns = list(data.columns)
+        self.last_predict_proba_model = model
         return pd.DataFrame({"neg": [0.4] * len(data), "pos": [0.6] * len(data)})
 
     def evaluate(self, data, silent=True):
@@ -52,7 +57,13 @@ class FakeTabularPredictor:
         return pd.Series([1.0] * len(feature_columns), index=feature_columns)
 
     def model_names(self):
-        return ["FakeModel"]
+        return ["FakeModel", "BaselineModel"]
+
+    def delete_models(self, models_to_keep, dry_run=False):
+        self.last_delete_models = {"models_to_keep": models_to_keep, "dry_run": dry_run}
+
+    def save_space(self):
+        return None
 
     @classmethod
     def load(cls, path, require_version_match=False):
@@ -190,3 +201,26 @@ def test_load_restores_feature_columns_and_aligns_predict_proba(monkeypatch, tmp
 
     assert loaded_predictor._feature_columns == ["feat_a", "feat_b"]
     assert FakeTabularPredictor.load_return.last_predict_proba_columns == ["feat_a", "feat_b"]
+
+
+def test_predict_proba_passes_explicit_model_name(monkeypatch, tmp_path):
+    install_fake_autogluon(monkeypatch)
+
+    predictor = LeadScoringPredictor(label="label", output_path=str(tmp_path))
+    predictor._predictor = FakeTabularPredictor(label="label", path=str(tmp_path))
+    predictor._feature_columns = ["feat_a"]
+
+    predictor.predict_proba(pd.DataFrame({"feat_a": [1]}), model="BaselineModel")
+
+    assert predictor._predictor.last_predict_proba_model == "BaselineModel"
+
+
+def test_cleanup_can_keep_named_models(monkeypatch, tmp_path):
+    install_fake_autogluon(monkeypatch)
+
+    predictor = LeadScoringPredictor(label="label", output_path=str(tmp_path))
+    predictor._predictor = FakeTabularPredictor(label="label", path=str(tmp_path))
+
+    predictor.cleanup(keep_best_only=False, keep_model_names=["FakeModel", "BaselineModel"])
+
+    assert predictor._predictor.last_delete_models["models_to_keep"] == ["FakeModel", "BaselineModel"]

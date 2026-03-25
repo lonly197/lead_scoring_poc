@@ -13,7 +13,7 @@
 | 脚本 | 目标变量 | 任务类型 | 核心特性 |
 |------|----------|----------|----------|
 | `train_arrive.py` | `到店标签_14天` | 二分类 | 智能自适应 OOT/随机切分，输出 Top-K/Lift |
-| `train_ohab.py` | `线索评级_试驾前` | 多分类 | 智能自适应 OOT/随机切分，多类别权重平衡 |
+| `train_ohab.py` | `线索评级_试驾前` | 多分类 | 智能自适应 OOT/随机切分，多类别权重平衡，支持基线模型对比 |
 | `train_test_drive.py` | `试驾标签_14天` | 二分类 | 支持所有特征工程与自适应切分 |
 
 ---
@@ -165,6 +165,36 @@ uv run python scripts/validate_model.py \
     --model-path ./outputs/models/ohab_model \
     --data-path ./data/202603.tsv
 ```
+
+### HAB 基线模型对比建议
+
+如果需要在 POC 汇报中同时展示“基线模型 vs 最优模型”，推荐在训练时启用：
+
+```bash
+uv run python scripts/train_ohab.py \
+    --data-path ./data/202602~03.tsv \
+    --preset high_quality \
+    --label-mode hab \
+    --enable-model-comparison \
+    --baseline-family gbm \
+    --train-end 2026-03-15 \
+    --valid-end 2026-03-20
+```
+
+启用后会额外保留：
+
+- `baseline_model_name`
+- `best_model_name`
+- 两个模型各自的阈值策略
+- `model_comparison_config.json`
+
+验证阶段会同步输出：
+
+- `model_comparison.csv`
+- `predictions_baseline.csv`
+- `predictions_best.csv`
+
+推荐将 `model_comparison.csv` 作为客户汇报中的“模型对比页”输入。
 
 验证脚本会优先读取训练时保存的 `feature_metadata.json`：
 - `mode=oot` / `mode=oot_manual` 时，只评估 `时间 >= valid_end` 的 OOT 测试段

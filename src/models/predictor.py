@@ -251,7 +251,7 @@ class LeadScoringPredictor:
 
         return self
 
-    def predict(self, data: pd.DataFrame) -> np.ndarray:
+    def predict(self, data: pd.DataFrame, model: Optional[str] = None) -> np.ndarray:
         """
         预测类别
 
@@ -269,9 +269,12 @@ class LeadScoringPredictor:
             dataset_name="predict_data",
             include_label=False,
         )
-        return self._predictor.predict(aligned_data)
+        predict_kwargs = {}
+        if model:
+            predict_kwargs["model"] = model
+        return self._predictor.predict(aligned_data, **predict_kwargs)
 
-    def predict_proba(self, data: pd.DataFrame) -> pd.DataFrame:
+    def predict_proba(self, data: pd.DataFrame, model: Optional[str] = None) -> pd.DataFrame:
         """
         预测概率
 
@@ -289,9 +292,12 @@ class LeadScoringPredictor:
             dataset_name="predict_data",
             include_label=False,
         )
-        return self._predictor.predict_proba(aligned_data)
+        predict_kwargs = {}
+        if model:
+            predict_kwargs["model"] = model
+        return self._predictor.predict_proba(aligned_data, **predict_kwargs)
 
-    def get_positive_proba(self, data: pd.DataFrame) -> np.ndarray:
+    def get_positive_proba(self, data: pd.DataFrame, model: Optional[str] = None) -> np.ndarray:
         """
         获取正类概率（用于二分类 Top-K 排序）
 
@@ -301,7 +307,7 @@ class LeadScoringPredictor:
         Returns:
             正类概率数组
         """
-        proba = self.predict_proba(data)
+        proba = self.predict_proba(data, model=model)
 
         if self.problem_type == "multiclass" or proba.shape[1] > 2:
             # 多分类，返回最大概率
@@ -421,6 +427,12 @@ class LeadScoringPredictor:
             )
 
         return self._predictor.leaderboard(aligned_test_data, silent=silent)
+
+    def get_model_names(self) -> List[str]:
+        """返回当前 predictor 持有的全部模型名。"""
+        if self._predictor is None:
+            raise ValueError("模型未训练，请先调用 train() 或 load()")
+        return list(self._predictor.model_names())
 
     def get_feature_importance(
         self,
@@ -564,13 +576,19 @@ class LeadScoringPredictor:
 
         return info
 
-    def cleanup(self, keep_best_only: bool = True, dry_run: bool = False) -> Dict[str, Any]:
+    def cleanup(
+        self,
+        keep_best_only: bool = True,
+        dry_run: bool = False,
+        keep_model_names: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
         """
         清理模型文件释放磁盘空间
 
         Args:
             keep_best_only: 是否只保留最佳模型
             dry_run: 仅模拟运行，不实际删除
+            keep_model_names: 显式指定需要保留的模型列表
 
         Returns:
             清理结果信息
@@ -600,7 +618,14 @@ class LeadScoringPredictor:
         if not dry_run:
             try:
                 # 删除非最佳模型
-                if keep_best_only:
+                if keep_model_names:
+                    resolved_keep_models = [
+                        model_name for model_name in keep_model_names
+                        if model_name in self._predictor.model_names()
+                    ]
+                    logger.info(f"删除非保留模型以释放空间，保留: {resolved_keep_models}")
+                    self._predictor.delete_models(models_to_keep=resolved_keep_models, dry_run=False)
+                elif keep_best_only:
                     logger.info("删除非最佳模型以释放空间...")
                     self._predictor.delete_models(models_to_keep="best", dry_run=False)
 

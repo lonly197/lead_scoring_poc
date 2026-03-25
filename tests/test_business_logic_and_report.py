@@ -69,6 +69,28 @@ def test_generate_business_report_reads_structured_outputs(tmp_path, monkeypatch
         json.dumps({"message": "H/A/B 分层单调"}, ensure_ascii=False),
         encoding="utf-8",
     )
+    (validation_dir / "model_comparison.json").write_text(
+        json.dumps(
+            [
+                {
+                    "role": "baseline",
+                    "model_name": "LightGBM",
+                    "balanced_accuracy": 0.51,
+                    "macro_f1": 0.49,
+                    "b_recall": 0.08,
+                },
+                {
+                    "role": "best",
+                    "model_name": "WeightedEnsemble_L2",
+                    "balanced_accuracy": 0.58,
+                    "macro_f1": 0.57,
+                    "b_recall": 0.14,
+                },
+            ],
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
     pd.DataFrame(
         [
             {"线索唯一ID": "DIS1", "预测HAB": "H", "建议SOP": "24小时内优先跟进", "原因1": "客户提及试驾"},
@@ -85,4 +107,5 @@ def test_generate_business_report_reads_structured_outputs(tmp_path, monkeypatch
 
     content = output_path.read_text(encoding="utf-8")
     assert "HAB 线索评级 POC 业务报告" in content
+    assert "基线模型 vs 最优模型" in content
     assert "24小时内优先跟进" in content

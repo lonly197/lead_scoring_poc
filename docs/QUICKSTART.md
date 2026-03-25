@@ -70,24 +70,28 @@ uv run python scripts/run.py train_ohab --daemon --preset high_quality
 
 - 默认 `--label-mode hab`，仅训练 `H/A/B`
 - `O` 视为已成交/已锁单状态，不进入常规评级桶
+- 可选 `--enable-model-comparison`，保留一个 AutoGluon 内部子模型作为基线（推荐 `gbm`）
 - 训练完成后会在模型目录输出：
   - `feature_importance.*`
   - `business_dimension_contribution.*`
   - `predictions_test.csv`
   - `hab_bucket_summary.*`
   - `evaluation_summary.json`
+  - `model_comparison_config.json`
 
 **推荐切分策略**：
 
 对 `202602~03.tsv` 这类跨月数据，建议固定手动 OOT 切分，保证每次汇报口径一致。
 
 ```bash
-# 推荐：HAB 评级训练（固定 OOT 口径）
+# 推荐：HAB 评级训练（固定 OOT 口径 + 基线模型对比）
 uv run python scripts/run.py train_ohab --daemon \
     --data-path ./data/202602~03.tsv \
     --preset high_quality \
     --num-bag-folds 5 \
     --label-mode hab \
+    --enable-model-comparison \
+    --baseline-family gbm \
     --train-end 2026-03-15 \
     --valid-end 2026-03-20
 ```
@@ -122,11 +126,15 @@ uv run python scripts/validate_model.py \
 - `hab_bucket_summary.csv`
 - `lead_actions.csv`
 - `monotonicity_check.json`
+- `model_comparison.csv`
+- `predictions_baseline.csv`
+- `predictions_best.csv`
 
 其中：
 
 - `hab_bucket_summary.csv`：看 `H/A/B` 三桶的 14 天到店率、试驾率是否形成单调分层
 - `lead_actions.csv`：可直接给业务看，包含 `预测HAB + 建议SOP + 原因1-3`
+- `model_comparison.csv`：看基线模型和最优模型在 `平衡准确率 / 宏平均 F1 / B 类召回率` 上的差异
 
 ### 生成客户版 Markdown 报告
 
@@ -153,6 +161,8 @@ uv run python scripts/run.py train_ohab --daemon \
     --preset high_quality \
     --num-bag-folds 5 \
     --label-mode hab \
+    --enable-model-comparison \
+    --baseline-family gbm \
     --train-end 2026-03-15 \
     --valid-end 2026-03-20
 

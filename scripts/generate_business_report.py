@@ -30,6 +30,11 @@ from src.utils.helpers import get_timestamp, setup_logging
 
 logger = logging.getLogger(__name__)
 
+ROLE_DISPLAY = {
+    "baseline": "基线模型",
+    "best": "最优模型",
+}
+
 
 def parse_args():
     parser = argparse.ArgumentParser(description="生成客户版业务解释报告")
@@ -78,6 +83,7 @@ def generate_report() -> None:
     evaluation_summary = _load_json(validation_dir / "evaluation_summary.json", {})
     bucket_summary = _load_json(validation_dir / "hab_bucket_summary.json", [])
     monotonicity_check = _load_json(validation_dir / "monotonicity_check.json", {})
+    model_comparison = _load_json(validation_dir / "model_comparison.json", [])
     dimension_contribution = _load_json(model_dir / "business_dimension_contribution.json", {})
     lead_actions_df = _load_dataframe(validation_dir / "lead_actions.csv")
     feature_importance_df = _load_dataframe(model_dir / "feature_importance.csv")
@@ -108,15 +114,31 @@ def generate_report() -> None:
         report_lines.append("- 当前未找到 HAB 桶业务摘要，请先运行 validate_model.py。")
 
     if balanced_accuracy is not None:
-        report_lines.append(f"- 平衡准确率（Balanced Accuracy）: {float(balanced_accuracy):.4f}")
+        report_lines.append(f"- 平衡准确率 Balanced Accuracy: {float(balanced_accuracy):.4f}")
     if macro_f1 is not None:
-        report_lines.append(f"- Macro F1: {float(macro_f1):.4f}")
+        report_lines.append(f"- 宏平均 F1 Macro F1: {float(macro_f1):.4f}")
     if monotonicity_check:
         report_lines.append(f"- 分层检查: {monotonicity_check.get('message', '无')}")
 
+    if model_comparison:
+        report_lines.extend([
+            "",
+            "## 2. 基线模型 vs 最优模型",
+            "",
+            "| 模型角色 | 模型名称 | 平衡准确率 Balanced Accuracy | 宏平均 F1 Macro F1 | B 类召回率 B Recall |",
+            "|----------|----------|-------------------------------|--------------------|--------------------|",
+        ])
+        for row in model_comparison:
+            report_lines.append(
+                f"| {ROLE_DISPLAY.get(row.get('role', ''), row.get('role', ''))} | {row.get('model_name', '')} | "
+                f"{float(row.get('balanced_accuracy', 0.0)):.4f} | "
+                f"{float(row.get('macro_f1', 0.0)):.4f} | "
+                f"{float(row.get('b_recall', 0.0)):.4f} |"
+            )
+
     report_lines.extend([
         "",
-        "## 2. 五大业务维度贡献",
+        "## 3. 五大业务维度贡献",
         "",
         "| 维度 | 贡献值 |",
         "|------|--------|",
@@ -128,7 +150,7 @@ def generate_report() -> None:
 
     report_lines.extend([
         "",
-        "## 3. Top 特征信号",
+        "## 4. Top 特征信号",
         "",
         "| 特征 | 重要性 |",
         "|------|--------|",
@@ -140,7 +162,7 @@ def generate_report() -> None:
 
     report_lines.extend([
         "",
-        "## 4. 一线下发示例",
+        "## 5. 一线下发示例",
         "",
         "| 线索ID | 预测HAB | 建议SOP | 原因1 |",
         "|--------|---------|---------|-------|",
@@ -155,7 +177,7 @@ def generate_report() -> None:
 
     report_lines.extend([
         "",
-        "## 5. 使用说明",
+        "## 6. 使用说明",
         "",
         "- 销售前台只展示 H/A/B、建议 SOP 和原因摘要，不展示模型内部指标。",
         "- 运营和项目组通过附录中的模型指标和行为分层结果判断 POC 是否成立。",
