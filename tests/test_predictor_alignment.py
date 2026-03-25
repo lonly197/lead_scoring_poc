@@ -33,12 +33,14 @@ class FakeTabularPredictor:
     last_instance = None
     load_return = None
     feature_importance_return = None
+    predict_proba_return = None
 
     def __init__(self, **kwargs):
         self.init_kwargs = kwargs
         self.label = kwargs.get("label", "label")
         self.eval_metric = kwargs.get("eval_metric", "roc_auc")
         self.problem_type = kwargs.get("problem_type", "binary")
+        self.positive_class = "pos"
         self.model_best = "FakeModel"
         self.last_predict_columns = None
         self.last_predict_proba_columns = None
@@ -111,6 +113,8 @@ class FakeTabularPredictor:
     def predict_proba(self, data, model=None):
         self.last_predict_proba_columns = list(data.columns)
         self.last_predict_proba_model = model
+        if FakeTabularPredictor.predict_proba_return is not None:
+            return FakeTabularPredictor.predict_proba_return.copy()
         return pd.DataFrame({"neg": [0.4] * len(data), "pos": [0.6] * len(data)})
 
     def evaluate(self, data, silent=True):
@@ -140,6 +144,7 @@ class FakeTabularPredictor:
 
 def install_fake_autogluon(monkeypatch):
     FakeTabularPredictor.feature_importance_return = None
+    FakeTabularPredictor.predict_proba_return = None
     autogluon_module = types.ModuleType("autogluon")
     tabular_module = types.ModuleType("autogluon.tabular")
     tabular_module.TabularPredictor = FakeTabularPredictor
@@ -282,6 +287,43 @@ def test_predict_proba_passes_explicit_model_name(monkeypatch, tmp_path):
     predictor.predict_proba(pd.DataFrame({"feat_a": [1]}), model="BaselineModel")
 
     assert predictor._predictor.last_predict_proba_model == "BaselineModel"
+
+
+def test_get_class_proba_returns_requested_multiclass_column(monkeypatch, tmp_path):
+    install_fake_autogluon(monkeypatch)
+    FakeTabularPredictor.predict_proba_return = pd.DataFrame(
+        {
+            "H": [0.7, 0.2],
+            "A": [0.2, 0.5],
+            "B": [0.1, 0.3],
+        }
+    )
+
+    predictor = LeadScoringPredictor(label="label", output_path=str(tmp_path), problem_type="multiclass")
+    predictor._predictor = FakeTabularPredictor(label="label", path=str(tmp_path), problem_type="multiclass")
+    predictor._feature_columns = ["feat_a"]
+
+    proba = predictor.get_class_proba(pd.DataFrame({"feat_a": [1, 2]}), target_class="H")
+
+    assert list(proba) == [0.7, 0.2]
+
+
+def test_get_class_proba_rejects_unknown_class(monkeypatch, tmp_path):
+    install_fake_autogluon(monkeypatch)
+    FakeTabularPredictor.predict_proba_return = pd.DataFrame(
+        {
+            "H": [0.7],
+            "A": [0.2],
+            "B": [0.1],
+        }
+    )
+
+    predictor = LeadScoringPredictor(label="label", output_path=str(tmp_path), problem_type="multiclass")
+    predictor._predictor = FakeTabularPredictor(label="label", path=str(tmp_path), problem_type="multiclass")
+    predictor._feature_columns = ["feat_a"]
+
+    with pytest.raises(ValueError, match="目标类别 O 不存在于预测概率输出中"):
+        predictor.get_class_proba(pd.DataFrame({"feat_a": [1]}), target_class="O")
 
 
 def test_cleanup_can_keep_named_models(monkeypatch, tmp_path):

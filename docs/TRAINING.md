@@ -24,7 +24,7 @@
 | 脚本 | 目标变量 | 任务类型 | 核心特性 |
 |------|----------|----------|----------|
 | `train_arrive.py` | `到店标签_14天` | 二分类 | 智能自适应 OOT/随机切分，输出 Top-K/Lift |
-| `train_ohab.py` | `线索评级_试驾前` | 多分类 | 智能自适应 OOT/随机切分，多类别权重平衡，支持基线模型对比 |
+| `train_ohab.py` | `线索评级_试驾前` | 多分类 | 智能自适应 OOT/随机切分，多类别权重平衡，支持基线模型对比，默认仅输出结构化解释产物 |
 | `train_test_drive.py` | `试驾标签_14天` | 二分类 | 支持所有特征工程与自适应切分 |
 
 ---
@@ -83,6 +83,7 @@ uv run python scripts/run.py train_ohab --daemon \
 - 默认排除 `RF/XT/KNN/FASTAI/NN_TORCH`
 - 固定 `fit_strategy=sequential`
 - 固定 `num_folds_parallel=1`
+- 默认关闭 OHAB 解释性 PNG 图表，仅保留 CSV/JSON 结构化产物
 
 这套组合针对当前 16GB / 8 核 / CPU-only 服务器做过收敛，优先保证训练稳定性和基线对比可复现性，不建议直接切到 `high_quality`。
 
@@ -107,6 +108,13 @@ uv run python scripts/run.py train_ohab --daemon \
 ```
 
 该档位只恢复 `NN_TORCH`，保持 `FASTAI/RF/XT` 继续排除，并关闭 bagging。若 `balanced_accuracy` 或 `macro_f1` 没有稳定提升，不建议在当前机器上继续扩展模型池。
+
+### OHAB 补充产物口径
+
+- `train_ohab` 默认生成 `feature_importance.csv/json` 和 `business_dimension_contribution.json`。
+- `train_ohab` 默认不生成 `feature_importance.png`、`business_dimension_contribution.png`；如需汇报配图，显式设置 `OHAB_GENERATE_PLOTS=true` 或传 `--generate-plots`。
+- 客户报告 `generate_business_report.py` 读取的是结构化 CSV/JSON，不依赖 PNG。
+- OHAB 的 Top-K 名单语义固定为按 `P(H)` 排序；命令行生成时必须显式传 `--target-class H`。
 
 ---
 

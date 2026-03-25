@@ -13,6 +13,7 @@ def _make_args(**overrides):
         label_mode=None,
         enable_model_comparison=None,
         baseline_family=None,
+        generate_plots=None,
         memory_limit_gb=None,
         fit_strategy=None,
         excluded_model_types=None,
@@ -50,6 +51,7 @@ def test_resolve_training_config_uses_server_16g_compare_defaults(monkeypatch):
     assert resolved["num_bag_folds"] == 3
     assert resolved["enable_model_comparison"] is True
     assert resolved["baseline_family"] == "gbm"
+    assert resolved["generate_plots"] is False
     assert resolved["memory_limit_gb"] == 8.0
     assert resolved["fit_strategy"] == "sequential"
     assert resolved["num_folds_parallel"] == 1
@@ -153,3 +155,16 @@ def test_resolve_training_config_normalizes_gbdt_cli_alias(monkeypatch):
     resolved = resolve_training_config(_make_args(baseline_family="gbdt"))
 
     assert resolved["baseline_family"] == "gbm"
+
+
+def test_resolve_training_config_respects_generate_plots_env(monkeypatch):
+    monkeypatch.setenv("OHAB_GENERATE_PLOTS", "true")
+    monkeypatch.setattr(
+        ohab_runtime,
+        "detect_system_resources",
+        lambda: {"cpu_count": 8, "total_memory_gb": 15.45, "available_memory_gb": 10.96},
+    )
+
+    resolved = resolve_training_config(_make_args())
+
+    assert resolved["generate_plots"] is True

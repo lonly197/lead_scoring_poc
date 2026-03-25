@@ -440,6 +440,38 @@ class LeadScoringPredictor:
             positive_class = self._predictor.positive_class
             return proba[positive_class].values
 
+    def get_class_proba(
+        self,
+        data: pd.DataFrame,
+        target_class: str,
+        model: Optional[str] = None,
+    ) -> np.ndarray:
+        """
+        获取指定类别的预测概率（用于多分类 Top-K 排序）
+
+        Args:
+            data: 输入数据
+            target_class: 目标类别名
+            model: 指定模型名（可选）
+
+        Returns:
+            指定类别的预测概率数组
+        """
+        proba = self.predict_proba(data, model=model)
+        target_class_str = str(target_class)
+
+        if target_class in proba.columns:
+            return proba[target_class].values
+
+        column_mapping = {str(column): column for column in proba.columns}
+        if target_class_str in column_mapping:
+            return proba[column_mapping[target_class_str]].values
+
+        available_classes = ", ".join(str(column) for column in proba.columns)
+        raise ValueError(
+            f"目标类别 {target_class_str} 不存在于预测概率输出中，可用类别: {available_classes}"
+        )
+
     def evaluate(
         self, test_data: pd.DataFrame, metrics: Optional[List[str]] = None
     ) -> Dict[str, float]:

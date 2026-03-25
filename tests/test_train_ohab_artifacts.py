@@ -8,10 +8,19 @@ from pathlib import Path
 import pandas as pd
 
 
-def load_train_ohab_script(monkeypatch, tmp_path: Path):
+def load_train_ohab_script(
+    monkeypatch,
+    tmp_path: Path,
+    *,
+    feature_importance_error: bool = True,
+    runtime_overrides: dict | None = None,
+    plot_calls: list[tuple[str, str]] | None = None,
+    topk_calls: list[dict] | None = None,
+):
     base_output_dir = tmp_path / "outputs"
     model_root = base_output_dir / "models"
     topk_root = base_output_dir / "topk_lists"
+    runtime_overrides = runtime_overrides or {}
 
     config_module = types.ModuleType("config.config")
     config_module.config = types.SimpleNamespace(
@@ -168,7 +177,14 @@ def load_train_ohab_script(monkeypatch, tmp_path: Path):
             return pd.Series(["H"] * len(test_df))
 
         def get_feature_importance(self, test_df):
-            raise ValueError("boom")
+            if feature_importance_error:
+                raise ValueError("boom")
+            return pd.DataFrame(
+                [
+                    {"feature": "提及试驾", "importance": 0.42},
+                    {"feature": "有效通话", "importance": 0.31},
+                ]
+            )
 
         def save(self, extra_metadata=None):
             self.saved_extra_metadata = extra_metadata
@@ -191,6 +207,7 @@ def load_train_ohab_script(monkeypatch, tmp_path: Path):
         "label_mode": "hab",
         "enable_model_comparison": True,
         "baseline_family": "gbm",
+        "generate_plots": False,
         "memory_limit_gb": 8.5,
         "fit_strategy": "sequential",
         "excluded_model_types": ["RF", "XT"],
@@ -203,11 +220,16 @@ def load_train_ohab_script(monkeypatch, tmp_path: Path):
             "derived_memory_limit_gb": 8.5,
             "derived_num_folds_parallel": 1,
         },
+        **runtime_overrides,
     }
 
     visualization_module = types.ModuleType("src.utils.visualization")
-    visualization_module.plot_feature_importance = lambda *args, **kwargs: None
-    visualization_module.plot_dimension_contribution = lambda *args, **kwargs: None
+    visualization_module.plot_feature_importance = lambda *args, **kwargs: (
+        plot_calls.append(("feature_importance", kwargs.get("output_path", ""))) if plot_calls is not None else None
+    )
+    visualization_module.plot_dimension_contribution = lambda *args, **kwargs: (
+        plot_calls.append(("business_dimension_contribution", kwargs.get("output_path", ""))) if plot_calls is not None else None
+    )
 
     helpers_module = types.ModuleType("src.utils.helpers")
     helpers_module.check_disk_space = lambda *args, **kwargs: {"free_gb": 20.0}
@@ -221,7 +243,17 @@ def load_train_ohab_script(monkeypatch, tmp_path: Path):
     helpers_module.update_process_status = lambda *args, **kwargs: None
 
     topk_module = types.ModuleType("scripts.generate_topk")
-    topk_module.generate_topk_from_predictor = lambda *args, **kwargs: None
+
+    def _generate_topk_from_predictor(*args, **kwargs):
+        if topk_calls is not None:
+            topk_calls.append(kwargs)
+        output_prefix = Path(kwargs["output_path"])
+        output_file = output_prefix.parent / f"{output_prefix.name}_top100.csv"
+        output_file.parent.mkdir(parents=True, exist_ok=True)
+        output_file.write_text("rank,线索唯一ID,predicted_proba\n1,1,0.9\n", encoding="utf-8")
+        return [output_file]
+
+    topk_module.generate_topk_from_predictor = _generate_topk_from_predictor
 
     monkeypatch.setitem(sys.modules, "config.config", config_module)
     monkeypatch.setitem(sys.modules, "src.data.loader", loader_module)
@@ -283,3 +315,43 @@ def test_train_ohab_persists_core_artifacts_when_feature_importance_fails(monkey
         "LightGBMXT_BAG_L2_FULL",
         "WeightedEnsemble_L3_FULL",
     ]
+
+
+def test_train_ohab_skips_optional_plots_and_generates_h_topk(monkeypatch, tmp_path):
+    plot_calls: list[tuple[str, str]] = []
+    topk_calls: list[dict] = []
+    train_ohab, _ = load_train_ohab_script(
+        monkeypatch,
+        tmp_path,
+        feature_importance_error=False,
+        plot_calls=plot_calls,
+        topk_calls=topk_calls,
+    )
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "train_ohab.py",
+            "--data-path",
+            "./data/202602~03.tsv",
+            "--output-dir",
+            str(tmp_path / "outputs" / "models"),
+        ],
+    )
+
+    train_ohab.main()
+
+    model_dir = tmp_path / "outputs" / "models" / "ohab_model"
+    feature_metadata = json.loads((model_dir / "feature_metadata.json").read_text(encoding="utf-8"))
+    evaluation_summary = json.loads((model_dir / "evaluation_summary.json").read_text(encoding="utf-8"))
+
+    assert (model_dir / "feature_importance.csv").exists()
+    assert (model_dir / "feature_importance.json").exists()
+    assert (model_dir / "business_dimension_contribution.json").exists()
+    assert not (model_dir / "feature_importance.png").exists()
+    assert not (model_dir / "business_dimension_contribution.png").exists()
+    assert plot_calls == []
+    assert topk_calls[0]["target_class"] == "H"
+    assert feature_metadata["artifact_status"]["supplemental_failures"] == []
+    assert evaluation_summary["supplemental_failures"] == []

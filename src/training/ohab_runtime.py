@@ -28,6 +28,7 @@ TRAINING_PROFILES: dict[str, dict[str, Any]] = {
         "label_mode": "hab",
         "enable_model_comparison": True,
         "baseline_family": "gbm",
+        "generate_plots": False,
         "memory_limit_gb": None,  # 自动根据可用内存计算
         "fit_strategy": "sequential",
         "excluded_model_types": DEFAULT_MEMORY_HEAVY_MODELS,
@@ -41,6 +42,7 @@ TRAINING_PROFILES: dict[str, dict[str, Any]] = {
         "label_mode": "hab",
         "enable_model_comparison": False,
         "baseline_family": "gbm",
+        "generate_plots": False,
         "memory_limit_gb": None,
         "fit_strategy": "sequential",
         "excluded_model_types": DEFAULT_MEMORY_HEAVY_MODELS,
@@ -54,6 +56,7 @@ TRAINING_PROFILES: dict[str, dict[str, Any]] = {
         "label_mode": "hab",
         "enable_model_comparison": False,
         "baseline_family": "gbm",
+        "generate_plots": False,
         "memory_limit_gb": None,
         "fit_strategy": "sequential",
         "excluded_model_types": ["RF", "XT", "KNN", "FASTAI"],
@@ -67,6 +70,7 @@ TRAINING_PROFILES: dict[str, dict[str, Any]] = {
         "label_mode": "hab",
         "enable_model_comparison": True,
         "baseline_family": "gbm",
+        "generate_plots": True,
         "memory_limit_gb": None,
         "fit_strategy": "parallel",
         "excluded_model_types": None,
@@ -318,6 +322,14 @@ def resolve_training_config(args) -> dict[str, Any]:
             normalize_baseline_family(_env("OHAB_BASELINE_FAMILY")),
             normalize_baseline_family(profile.get("baseline_family")),
             normalize_baseline_family("gbm"),
+        ),
+        "generate_plots": bool(
+            _coalesce(
+                getattr(args, "generate_plots", None),
+                _env_bool("OHAB_GENERATE_PLOTS"),
+                profile.get("generate_plots"),
+                False,
+            )
         ),
         "memory_limit_gb": memory_limit_gb,
         "fit_strategy": _coalesce(

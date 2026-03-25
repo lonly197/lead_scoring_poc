@@ -256,6 +256,19 @@ def parse_args():
         help="模型对比时的基线家族",
     )
     parser.add_argument(
+        "--generate-plots",
+        dest="generate_plots",
+        action="store_true",
+        default=None,
+        help="生成解释性 PNG 图表（默认关闭，仅保留 CSV/JSON）",
+    )
+    parser.add_argument(
+        "--no-generate-plots",
+        dest="generate_plots",
+        action="store_false",
+        help="关闭解释性 PNG 图表生成",
+    )
+    parser.add_argument(
         "--training-profile",
         type=str,
         default=None,
@@ -320,6 +333,7 @@ def main():
     label_mode = runtime_config["label_mode"]
     enable_model_comparison = runtime_config["enable_model_comparison"]
     baseline_family = runtime_config["baseline_family"]
+    generate_plots = runtime_config["generate_plots"]
     memory_limit_gb = runtime_config["memory_limit_gb"]
     fit_strategy = runtime_config["fit_strategy"]
     excluded_model_types = runtime_config["excluded_model_types"]
@@ -367,6 +381,7 @@ def main():
         f"label_mode={label_mode}, "
         f"model_comparison={enable_model_comparison}, "
         f"baseline_family={baseline_family}, "
+        f"generate_plots={generate_plots}, "
         f"memory_limit_gb={memory_limit_gb}, "
         f"fit_strategy={fit_strategy}, "
         f"num_folds_parallel={num_folds_parallel}, "
@@ -675,10 +690,6 @@ def main():
         try:
             logger.info("计算特征重要性...")
             importance_df = predictor.get_feature_importance(test_df)
-            plot_feature_importance(
-                importance_df,
-                output_path=str(output_dir / "feature_importance.png")
-            )
             importance_df.to_csv(output_dir / "feature_importance.csv", index=False, encoding="utf-8-sig")
             importance_df.to_json(output_dir / "feature_importance.json", orient="records", force_ascii=False, indent=2)
 
@@ -689,12 +700,24 @@ def main():
             for dim, score in dimension_contribution.items():
                 logger.info(f"  - {dim}: {score:.4f}")
 
-            plot_dimension_contribution(
-                dimension_contribution,
-                output_path=str(output_dir / "business_dimension_contribution.png")
-            )
             with open(output_dir / "business_dimension_contribution.json", "w", encoding="utf-8") as f:
                 json.dump(dimension_contribution, f, ensure_ascii=False, indent=2)
+
+            if generate_plots:
+                try:
+                    plot_feature_importance(
+                        importance_df,
+                        output_path=str(output_dir / "feature_importance.png")
+                    )
+                    plot_dimension_contribution(
+                        dimension_contribution,
+                        output_path=str(output_dir / "business_dimension_contribution.png")
+                    )
+                except Exception as e:
+                    logger.warning(f"生成解释性 PNG 图表失败: {e}", exc_info=True)
+                    _append_failure_once(supplemental_failures, "plots")
+            else:
+                logger.info("已跳过解释性 PNG 图表生成（generate_plots=false）")
         except Exception as e:
             logger.warning(f"生成特征重要性/业务维度补充产物失败: {e}", exc_info=True)
             _append_failure_once(supplemental_failures, "feature_importance")
@@ -702,9 +725,19 @@ def main():
 
         try:
             from scripts.generate_topk import generate_topk_from_predictor
-            topk_path = Path(config.output.topk_dir) / f"topk_ohab_{get_timestamp()}.csv"
-            generate_topk_from_predictor(predictor, test_df, str(topk_path))
-            logger.info(f"Top-K 列表已生成: {topk_path}")
+            topk_output_prefix = Path(config.output.topk_dir) / f"topk_ohab_{get_timestamp()}"
+            generated_topk_files = generate_topk_from_predictor(
+                predictor,
+                test_df,
+                output_path=str(topk_output_prefix),
+                target_class="H",
+                id_column="线索唯一ID",
+                k_values=(100, 500, 1000),
+            )
+            logger.info(
+                "Top-K 列表已生成: %s",
+                ", ".join(str(path) for path in generated_topk_files),
+            )
         except Exception as e:
             logger.warning(f"生成 Top-K 列表失败: {e}", exc_info=True)
             _append_failure_once(supplemental_failures, "topk")

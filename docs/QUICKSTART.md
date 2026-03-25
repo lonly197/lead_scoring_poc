@@ -280,11 +280,24 @@ uv run python scripts/monitor.py list
 ## 生成 Top-K 名单
 
 ```bash
+# 到店二分类任务：沿用原有用法
 uv run python scripts/generate_topk.py \
     --model-path ./outputs/models/arrive_model \
     --data-path ./data/20260308-v2.csv \
     --k 100 500 1000
+
+# OHAB 多分类任务：必须显式指定目标类别，推荐按 P(H) 排序
+uv run python scripts/generate_topk.py \
+    --model-path ./outputs/models/ohab_model \
+    --data-path ./data/202602~03.tsv \
+    --target-class H \
+    --k 100 500 1000
 ```
+
+说明：
+- 二分类任务默认按正类概率排序。
+- 多分类任务不会再默认使用“最大类别概率”排序；必须显式传 `--target-class`。
+- OHAB 推荐使用 `--target-class H`，表示按 `P(H)` 生成优先跟进名单。
 
 ---
 
@@ -339,6 +352,8 @@ uv run python scripts/validate_model.py \
 - 验证脚本只接受由统一入口 `train_ohab.py` / `scripts/run.py train_ohab` 生成且 `feature_metadata.json -> artifact_status.training_complete=true` 的模型目录。
 - 若模型目录缺少 `artifact_status`、缺少 baseline/best 对比元数据，或来自旧的 `ohab_oot` 流程，`validate_model.py` 会直接报错并要求重新训练。
 - 若训练仅缺少 `feature_importance` / `business_dimension_contribution` / `topk` 等补充产物，仍可继续做 baseline vs best 验证，但客户报告中的特征贡献与 Top 特征章节会为空。
+- `train_ohab` 默认只生成 `feature_importance.csv/json` 与 `business_dimension_contribution.json`，不会默认生成 PNG 图表；客户报告不依赖这些图片。
+- 若确实需要汇报配图，可在训练时显式开启 `OHAB_GENERATE_PLOTS=true` 或传 `--generate-plots`。
 
 ---
 
