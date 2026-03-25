@@ -281,6 +281,14 @@ def load_and_adapt_data(
     # 衍生时间特征
     df = derive_time_features(df)
 
+    # === JSON 特征提取 ===
+    # 从跟进详情_JSON 提取高价值业务特征
+    from .json_extractor import batch_extract_json_features
+
+    if "跟进详情_JSON" in df.columns:
+        df = batch_extract_json_features(df, "跟进详情_JSON", drop_original=False)
+        print("JSON 特征提取完成")
+
     return df
 
 

@@ -24,6 +24,8 @@ sys.path.insert(0, str(project_root))
 from config.config import config, get_excluded_columns
 from src.data.loader import DataLoader, FeatureEngineer, smart_split_data, split_data_oot_three_way
 from src.models.predictor import LeadScoringPredictor
+from src.evaluation.business_logic import calculate_dimension_contribution, BUSINESS_DIMENSION_MAP
+from src.utils.visualization import plot_feature_importance, plot_dimension_contribution
 from src.utils.helpers import (
     check_disk_space,
     complete_process_if_running,
@@ -151,6 +153,17 @@ def main():
             df = df[df[target_label] != "Unknown"].copy()
             logger.info(f"过滤 Unknown 后: {len(df):,} 行")
 
+            # 处理 O 级样本不足
+            o_count = (df[target_label] == "O").sum()
+            logger.info(f"当前 O 级样本数: {o_count}")
+            
+            # 默认逻辑：如果 O 级样本少于 50 个，则自动将 O 级合并到 H 级
+            if o_count < 50 and o_count > 0:
+                logger.warning(f"O 级样本不足 50 个 ({o_count})，自动合并到 H 级以保证模型评估的统计意义")
+                df[target_label] = df[target_label].replace({"O": "H"})
+            elif o_count >= 50:
+                logger.info("O 级样本充足，保持独立分类")
+
         # 2. 特征工程
         logger.info("步骤 2/6: 特征工程")
         feature_engineer = FeatureEngineer(
@@ -202,9 +215,50 @@ def main():
         predictor.train(**train_kwargs)
 
         # 5. 模型评估
-        logger.info("步骤 5/6: 模型评估")
-        # 此处调用略 (同 oot 版本)
+        logger.info("步骤 5/6: 模型评估与可解释性分析")
+        evaluation_results = predictor.evaluate(test_df)
+        logger.info(f"评估结果: {evaluation_results}")
         
+        # 计算特征重要性
+        logger.info("计算特征重要性...")
+        importance_df = predictor.get_feature_importance(test_df)
+        
+        # 可视化特征重要性
+        plot_feature_importance(
+            importance_df, 
+            output_path=str(output_dir / "feature_importance.png")
+        )
+        
+        # 保存特征重要性原始数据
+        importance_df.to_json(output_dir / "feature_importance.json", orient="records", force_ascii=False, indent=2)
+        
+        # 统计业务维度贡献
+        feature_importance_dict = dict(zip(importance_df['feature'], importance_df['importance']))
+        dimension_contribution = calculate_dimension_contribution(feature_importance_dict)
+        
+        logger.info("业务维度贡献分析:")
+        for dim, score in dimension_contribution.items():
+            logger.info(f"  - {dim}: {score:.4f}")
+            
+        # 可视化业务维度贡献
+        plot_dimension_contribution(
+            dimension_contribution,
+            output_path=str(output_dir / "business_dimension_contribution.png")
+        )
+        
+        # 保存业务维度贡献结果
+        with open(output_dir / "business_dimension_contribution.json", "w", encoding="utf-8") as f:
+            json.dump(dimension_contribution, f, ensure_ascii=False, indent=2)
+            
+        # 自动生成 Top-K 列表
+        try:
+            from scripts.generate_topk import generate_topk_from_predictor
+            topk_path = Path(config.output.topk_dir) / f"topk_ohab_{get_timestamp()}.csv"
+            generate_topk_from_predictor(predictor, test_df, str(topk_path))
+            logger.info(f"Top-K 列表已生成: {topk_path}")
+        except ImportError:
+            logger.warning("scripts.generate_topk 未找到，跳过 Top-K 生成")
+            
         # 6. 保存与清理
         logger.info("步骤 6/6: 保存与清理")
         predictor.save()

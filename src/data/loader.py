@@ -160,6 +160,7 @@ class FeatureEngineer:
         self,
         time_columns: List[str],
         numeric_columns: Optional[List[str]] = None,
+        create_interactions: bool = True,  # 是否创建交互特征
     ):
         """
         初始化特征工程处理器
@@ -167,9 +168,11 @@ class FeatureEngineer:
         Args:
             time_columns: 时间列名列表
             numeric_columns: 数值列名列表（可选，用于类型转换）
+            create_interactions: 是否创建交互特征（默认 True）
         """
         self.time_columns = time_columns
         self.numeric_columns = numeric_columns or []
+        self.create_interactions = create_interactions
 
     def process(
         self,
@@ -193,6 +196,12 @@ class FeatureEngineer:
 
         # 2. 数值类型转换（确保类型正确）
         df = self._convert_numeric_types(df)
+
+        # 3. 交互特征（新增）
+        if self.create_interactions:
+            df, interaction_features = self._create_interaction_features(df)
+            metadata["interaction_features"] = interaction_features
+            logger.info(f"交互特征创建完成: {interaction_features}")
 
         # 注意：不再手动进行类别编码和缺失值填充
         # 这些交给 AutoGluon 的 AutoMLPipelineFeatureGenerator 自动处理
@@ -259,6 +268,80 @@ class FeatureEngineer:
             df[col] = pd.to_numeric(df[col], errors="coerce")
 
         return df
+
+    def _create_interaction_features(self, df: pd.DataFrame) -> Tuple[pd.DataFrame, List[str]]:
+        """
+        创建交互特征
+
+        交互特征能够捕捉特征之间的组合效应，提升模型区分能力：
+        - 时间响应特征：首触响应时长（及时响应的线索质量更高）
+        - 渠道组合特征：一级×二级渠道组合（不同渠道组合转化率不同）
+        - 城市×车型热度：城市车型热度（热门组合可能更容易成交）
+        - 通话质量特征：有效通话（区分无效骚扰与有效沟通）
+
+        Args:
+            df: 输入 DataFrame
+
+        Returns:
+            处理后的 DataFrame 和新增的特征名列表
+        """
+        df = df.copy()
+        new_features = []
+
+        # 1. 时间响应特征：首触响应时长
+        if '首触时间' in df.columns and '线索创建时间' in df.columns:
+            create_time = pd.to_datetime(df['线索创建时间'], errors='coerce')
+            first_touch = pd.to_datetime(df['首触时间'], errors='coerce')
+
+            df['首触响应时长_小时'] = (first_touch - create_time).dt.total_seconds() / 3600
+            new_features.append('首触响应时长_小时')
+
+            # 响应及时性分档（业务含义：即时<1h，快速<4h，正常<24h，延迟>=24h）
+            df['响应及时性'] = pd.cut(
+                df['首触响应时长_小时'].fillna(-1),
+                bins=[-1, 0, 1, 4, 24, float('inf')],
+                labels=['未知', '即时', '快速', '正常', '延迟']
+            ).astype(str)
+            new_features.append('响应及时性')
+
+            logger.debug(f"创建时间响应特征: 首触响应时长_小时, 响应及时性")
+
+        # 2. 渠道组合特征
+        if '一级渠道名称' in df.columns and '二级渠道名称' in df.columns:
+            df['渠道组合'] = (
+                df['一级渠道名称'].fillna('未知').astype(str) + '_' +
+                df['二级渠道名称'].fillna('未知').astype(str)
+            )
+            new_features.append('渠道组合')
+            logger.debug(f"创建渠道组合特征: 渠道组合")
+
+        # 3. 城市×车型热度
+        if '所在城市' in df.columns and '首触意向车型' in df.columns:
+            try:
+                city_car_counts = df.groupby(['所在城市', '首触意向车型']).size()
+                df['城市车型热度'] = df.apply(
+                    lambda x: city_car_counts.get((x['所在城市'], x['首触意向车型']), 0),
+                    axis=1
+                )
+                new_features.append('城市车型热度')
+                logger.debug(f"创建城市车型热度特征: 城市车型热度")
+            except Exception as e:
+                logger.warning(f"城市车型热度特征创建失败: {e}")
+
+        # 4. 通话质量特征
+        if '通话次数' in df.columns and '通话总时长' in df.columns:
+            # 平均通话时长
+            df['平均通话时长'] = df['通话总时长'] / df['通话次数'].replace(0, np.nan)
+            df['平均通话时长'] = df['平均通话时长'].fillna(0)
+            new_features.append('平均通话时长')
+
+            # 有效通话：通话次数>0 且 通话总时长>60秒（排除无效骚扰）
+            df['有效通话'] = ((df['通话次数'] > 0) & (df['通话总时长'] > 60)).astype(int)
+            new_features.append('有效通话')
+
+            logger.debug(f"创建通话质量特征: 平均通话时长, 有效通话")
+
+        return df, new_features
 
 
 def split_data(
