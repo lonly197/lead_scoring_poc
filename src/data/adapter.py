@@ -13,7 +13,7 @@
 """
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 import pandas as pd
 import numpy as np
 
@@ -95,6 +95,66 @@ OLD_DATA_FORMAT = DataFormatConfig(
 )
 
 
+SCHEMA_CONTRACT_VERSION = "v2"
+SCHEMA_ALIAS_MAPPING = {
+    "客户ID_店端_备用": "客户ID_店端",
+    "线索类型_备用": "线索类型",
+    "预算区间_备用": "预算区间",
+    "SOP开口标签_备用": "SOP开口标签",
+    "意向金支付状态_备用": "意向金支付状态",
+    "历史订单次数_备用": "历史订单次数",
+    "历史到店次数_备用": "历史到店次数",
+    "线索评级变化时间_备用": "线索评级变化时间",
+}
+
+
+def _series_is_missing(series: pd.Series) -> pd.Series:
+    """判断列值是否为空，兼容空字符串。"""
+    if pd.api.types.is_object_dtype(series) or pd.api.types.is_string_dtype(series):
+        return series.isna() | series.astype(str).str.strip().eq("")
+    return series.isna()
+
+
+def normalize_schema_contract(df: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+    """
+    将原始导出列收口为训练期使用的标准字段名，并返回收口元数据。
+    """
+    df = df.copy()
+    applied_aliases: Dict[str, str] = {}
+    filled_aliases: Dict[str, str] = {}
+    dropped_aliases: List[str] = []
+
+    for alias, canonical in SCHEMA_ALIAS_MAPPING.items():
+        if alias not in df.columns:
+            continue
+
+        if canonical not in df.columns:
+            df = df.rename(columns={alias: canonical})
+            applied_aliases[alias] = canonical
+            continue
+
+        alias_missing = _series_is_missing(df[alias])
+        canonical_missing = _series_is_missing(df[canonical])
+        fill_mask = canonical_missing & ~alias_missing
+        if fill_mask.any():
+            df.loc[fill_mask, canonical] = df.loc[fill_mask, alias]
+            filled_aliases[alias] = canonical
+
+        if alias != canonical:
+            df = df.drop(columns=[alias])
+            dropped_aliases.append(alias)
+
+    schema_contract = {
+        "version": SCHEMA_CONTRACT_VERSION,
+        "applied_aliases": applied_aliases,
+        "filled_aliases": filled_aliases,
+        "dropped_aliases": dropped_aliases,
+        "canonical_columns": sorted(df.columns.tolist()),
+    }
+
+    return df, schema_contract
+
+
 def detect_data_format(file_path: str) -> DataFormatConfig:
     """
     自动检测数据格式
@@ -168,11 +228,6 @@ def calculate_target_labels(df: pd.DataFrame) -> pd.DataFrame:
     if "线索评级结果" in df.columns and "线索评级_试驾前" not in df.columns:
         df["线索评级_试驾前"] = df["线索评级结果"].fillna("Unknown")
 
-    # === O 级合并逻辑 ===
-    # 将 O 级强制归并为 H 级（仅针对模型训练的评级字段），以提升高优样本浓度并避免分类不平衡
-    if "线索评级_试驾前" in df.columns:
-        df["线索评级_试驾前"] = df["线索评级_试驾前"].replace({"O": "H"})
-
     # 成交标签（如果有下订时间）
     if "下订时间" in df.columns:
         df["成交标签"] = df["下订时间"].notna().astype(int)
@@ -213,8 +268,9 @@ def derive_time_features(df: pd.DataFrame) -> pd.DataFrame:
 
 def load_and_adapt_data(
     file_path: str,
-    format_config: Optional[DataFormatConfig] = None
-) -> pd.DataFrame:
+    format_config: Optional[DataFormatConfig] = None,
+    return_metadata: bool = False,
+) -> Any:
     """
     加载并适配数据
 
@@ -275,6 +331,9 @@ def load_and_adapt_data(
             f"当前列名: {list(df.columns[:10])}...（共{len(df.columns)}列）"
         )
 
+    # 数据契约收口
+    df, schema_contract = normalize_schema_contract(df)
+
     # 计算目标标签
     df = calculate_target_labels(df)
 
@@ -285,9 +344,19 @@ def load_and_adapt_data(
     # 从跟进详情_JSON 提取高价值业务特征
     from .json_extractor import batch_extract_json_features
 
+    adaptation_metadata = {
+        "schema_contract": schema_contract,
+    }
+
     if "跟进详情_JSON" in df.columns:
         df = batch_extract_json_features(df, "跟进详情_JSON", drop_original=False)
         print("JSON 特征提取完成")
+        adaptation_metadata["json_feature_source"] = "跟进详情_JSON"
+
+    if return_metadata:
+        return df, adaptation_metadata
+
+    df.attrs["adaptation_metadata"] = adaptation_metadata
 
     return df
 

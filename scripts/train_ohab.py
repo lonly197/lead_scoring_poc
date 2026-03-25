@@ -16,6 +16,7 @@ import os
 import sys
 from datetime import datetime
 from pathlib import Path
+from typing import Iterable
 
 # 添加项目根目录到路径
 project_root = Path(__file__).parent.parent
@@ -23,6 +24,13 @@ sys.path.insert(0, str(project_root))
 
 from config.config import config, get_excluded_columns
 from src.data.loader import DataLoader, FeatureEngineer, smart_split_data, split_data_oot_three_way
+from src.data.label_policy import apply_ohab_label_policy, build_ohab_label_policy
+from src.evaluation.ohab_metrics import (
+    classification_report_dict,
+    compute_class_ranking_report,
+    compute_threshold_report,
+    confusion_matrix_frame,
+)
 from src.models.predictor import LeadScoringPredictor
 from src.evaluation.business_logic import calculate_dimension_contribution, BUSINESS_DIMENSION_MAP
 from src.utils.visualization import plot_feature_importance, plot_dimension_contribution
@@ -39,6 +47,21 @@ from src.utils.helpers import (
 logger = logging.getLogger(__name__)
 
 TASK_NAME = "train_ohab"
+
+
+def _parse_report_topk(raw_value: str) -> tuple[float, ...]:
+    values = []
+    for item in raw_value.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        values.append(float(item) / 100)
+    return tuple(values or [0.05, 0.10, 0.20])
+
+
+def _dump_json(path: Path, payload: dict | list) -> None:
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2, default=str)
 
 
 def parse_args():
@@ -100,6 +123,24 @@ def parse_args():
         default=None,
         help="日志文件路径",
     )
+    parser.add_argument(
+        "--o-merge-threshold",
+        type=int,
+        default=50,
+        help="训练集 O 级样本低于该阈值时自动合并",
+    )
+    parser.add_argument(
+        "--o-merge-target",
+        type=str,
+        default="H",
+        help="O 级样本不足时合并到的目标等级",
+    )
+    parser.add_argument(
+        "--report-topk",
+        type=str,
+        default="5,10,20",
+        help="多分类排序分析 Top 比例，逗号分隔的百分比值",
+    )
 
     return parser.parse_args()
 
@@ -112,6 +153,7 @@ def main():
     data_path = args.data_path or config.data.data_path
     target_label = args.target
     output_dir = Path(args.output_dir or config.output.models_dir) / "ohab_model"
+    top_ratios = _parse_report_topk(args.report_topk)
     
     # 日志设置
     if args.log_file:
@@ -148,43 +190,58 @@ def main():
         # 统一开启 auto_adapt=True 以支持 2-3 月新 SQL 格式
         loader = DataLoader(data_path, auto_adapt=True)
         df = loader.load()
+        adaptation_metadata = loader.get_adaptation_metadata()
 
         if target_label in df.columns:
             df = df[df[target_label] != "Unknown"].copy()
             logger.info(f"过滤 Unknown 后: {len(df):,} 行")
 
-            # 处理 O 级样本不足
-            o_count = (df[target_label] == "O").sum()
-            logger.info(f"当前 O 级样本数: {o_count}")
-            
-            # 默认逻辑：如果 O 级样本少于 50 个，则自动将 O 级合并到 H 级
-            if o_count < 50 and o_count > 0:
-                logger.warning(f"O 级样本不足 50 个 ({o_count})，自动合并到 H 级以保证模型评估的统计意义")
-                df[target_label] = df[target_label].replace({"O": "H"})
-            elif o_count >= 50:
-                logger.info("O 级样本充足，保持独立分类")
+        # 2. 智能数据切分
+        logger.info("步骤 2/6: 执行智能数据切分")
+        if args.train_end and args.valid_end:
+            logger.info(f"采用手动 OOT 切分: {args.train_end} / {args.valid_end}")
+            train_df, valid_df, test_df = split_data_oot_three_way(
+                df, target_label, "线索创建时间", args.train_end, args.valid_end
+            )
+            split_info = {"mode": "oot_manual", "train_end": args.train_end, "valid_end": args.valid_end}
+        else:
+            train_df, valid_df, test_df, split_info = smart_split_data(df, target_label)
 
-        # 2. 特征工程
-        logger.info("步骤 2/6: 特征工程")
+        label_policy = build_ohab_label_policy(
+            train_df,
+            target_label=target_label,
+            o_merge_threshold=args.o_merge_threshold,
+            merge_target=args.o_merge_target,
+        )
+        logger.info(f"训练标签策略: {label_policy}")
+
+        train_df = apply_ohab_label_policy(train_df, target_label, label_policy)
+        valid_df = apply_ohab_label_policy(valid_df, target_label, label_policy)
+        test_df = apply_ohab_label_policy(test_df, target_label, label_policy)
+
+        # 3. 特征工程（先 fit 训练集，再 transform 验证/测试集）
+        logger.info("步骤 3/6: 特征工程")
         feature_engineer = FeatureEngineer(
             time_columns=config.feature.time_columns,
             numeric_columns=config.feature.numeric_features,
         )
-        df_processed, feature_metadata = feature_engineer.process(df)
+        train_df, feature_metadata = feature_engineer.fit_transform(train_df)
+        valid_df, _ = feature_engineer.transform(
+            valid_df,
+            interaction_context=feature_metadata.get("interaction_context"),
+        )
+        test_df, _ = feature_engineer.transform(
+            test_df,
+            interaction_context=feature_metadata.get("interaction_context"),
+        )
 
-        # 3. 智能数据切分
-        logger.info("步骤 3/6: 执行智能数据切分")
-        if args.train_end and args.valid_end:
-            logger.info(f"采用手动 OOT 切分: {args.train_end} / {args.valid_end}")
-            train_df, valid_df, test_df = split_data_oot_three_way(
-                df_processed, target_label, "线索创建时间", args.train_end, args.valid_end
-            )
-            split_info = {"mode": "oot_manual", "train_end": args.train_end, "valid_end": args.valid_end}
-        else:
-            train_df, valid_df, test_df, split_info = smart_split_data(df_processed, target_label)
-        
         feature_metadata["split_info"] = split_info
-        
+        feature_metadata["label_policy"] = label_policy
+        feature_metadata["schema_contract"] = adaptation_metadata.get("schema_contract", {})
+        feature_metadata["feature_names_version"] = "ohab_schema_contract_v2"
+        if adaptation_metadata.get("json_feature_source"):
+            feature_metadata["json_feature_source"] = adaptation_metadata["json_feature_source"]
+
         # 4. 训练模型
         logger.info("步骤 4/6: 模型训练")
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -218,18 +275,38 @@ def main():
         logger.info("步骤 5/6: 模型评估与可解释性分析")
         evaluation_results = predictor.evaluate(test_df)
         logger.info(f"评估结果: {evaluation_results}")
-        
+        y_true = test_df[target_label].reset_index(drop=True)
+        y_pred = predictor.predict(test_df)
+        y_proba = predictor.predict_proba(test_df).reset_index(drop=True)
+
+        confusion_df = confusion_matrix_frame(y_true, y_pred)
+        classification_dict = classification_report_dict(y_true, y_pred)
+        class_ranking_report = compute_class_ranking_report(
+            y_true,
+            y_proba,
+            top_ratios=top_ratios,
+        )
+        b_threshold_report = None
+        if "B" in y_proba.columns:
+            b_threshold_report = compute_threshold_report(
+                y_true,
+                y_proba["B"],
+                positive_label="B",
+            )
+
         # 计算特征重要性
         logger.info("计算特征重要性...")
         importance_df = predictor.get_feature_importance(test_df)
-        
+        leaderboard_df = predictor.get_leaderboard(test_df, silent=True)
+
         # 可视化特征重要性
         plot_feature_importance(
             importance_df, 
             output_path=str(output_dir / "feature_importance.png")
         )
-        
+
         # 保存特征重要性原始数据
+        importance_df.to_csv(output_dir / "feature_importance.csv", index=False, encoding="utf-8-sig")
         importance_df.to_json(output_dir / "feature_importance.json", orient="records", force_ascii=False, indent=2)
         
         # 统计业务维度贡献
@@ -249,6 +326,31 @@ def main():
         # 保存业务维度贡献结果
         with open(output_dir / "business_dimension_contribution.json", "w", encoding="utf-8") as f:
             json.dump(dimension_contribution, f, ensure_ascii=False, indent=2)
+
+        leaderboard_df.to_csv(output_dir / "leaderboard.csv", index=False, encoding="utf-8-sig")
+        confusion_df.to_csv(output_dir / "confusion_matrix.csv", encoding="utf-8-sig")
+        _dump_json(output_dir / "classification_report.json", classification_dict)
+        _dump_json(output_dir / "class_ranking_report.json", class_ranking_report)
+
+        if b_threshold_report is not None:
+            b_threshold_report.to_csv(output_dir / "b_threshold_report.csv", index=False, encoding="utf-8-sig")
+
+        predictions_df = test_df[["线索唯一ID"]].copy() if "线索唯一ID" in test_df.columns else test_df[[target_label]].copy()
+        if "线索唯一ID" not in predictions_df.columns:
+            predictions_df.insert(0, "样本索引", test_df.index)
+        predictions_df["真实标签"] = y_true.values
+        predictions_df["预测标签"] = y_pred.values if hasattr(y_pred, "values") else y_pred
+        for col in y_proba.columns:
+            predictions_df[f"概率_{col}"] = y_proba[col].values
+        predictions_df.to_csv(output_dir / "predictions_test.csv", index=False, encoding="utf-8-sig")
+
+        evaluation_summary = {
+            "metrics": evaluation_results,
+            "label_policy": label_policy,
+            "split_info": split_info,
+            "top_ratios": list(top_ratios),
+        }
+        _dump_json(output_dir / "evaluation_summary.json", evaluation_summary)
             
         # 自动生成 Top-K 列表
         try:
@@ -261,7 +363,13 @@ def main():
             
         # 6. 保存与清理
         logger.info("步骤 6/6: 保存与清理")
-        predictor.save()
+        predictor.save(
+            extra_metadata={
+                "label_policy": label_policy,
+                "schema_contract": feature_metadata.get("schema_contract", {}),
+                "interaction_context": feature_metadata.get("interaction_context", {}),
+            }
+        )
         predictor.cleanup(keep_best_only=True)
 
         logger.info("=" * 60)

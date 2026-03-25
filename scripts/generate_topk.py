@@ -18,6 +18,7 @@ project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
 from config.config import config
+from src.data.label_policy import apply_ohab_label_policy
 from src.data.loader import DataLoader, FeatureEngineer
 from src.evaluation.metrics import ModelReport
 from src.models.predictor import LeadScoringPredictor
@@ -81,20 +82,32 @@ def main():
     print_separator("加载模型")
     predictor = LeadScoringPredictor.load(str(model_path))
     logger.info(f"模型信息: {predictor.get_model_info()}")
+    feature_metadata = {}
+    feature_metadata_path = model_path / "feature_metadata.json"
+    if feature_metadata_path.exists():
+        with open(feature_metadata_path, encoding="utf-8") as f:
+            feature_metadata = json.load(f)
 
     # 2. 加载数据
     print_separator("加载数据")
     loader = DataLoader(str(data_path), auto_adapt=True)
     df = loader.load()
     logger.info(f"数据量: {len(df)} 行")
+    target_label = predictor.label
+    if target_label in df.columns and feature_metadata.get("label_policy"):
+        df = apply_ohab_label_policy(df, target_label, feature_metadata.get("label_policy", {}))
 
     # 3. 特征工程
     print_separator("特征工程")
     feature_engineer = FeatureEngineer(
         time_columns=config.feature.time_columns,
         numeric_columns=config.feature.numeric_features,
+        interaction_context=feature_metadata.get("interaction_context", {}),
     )
-    df_processed, _ = feature_engineer.process(df)
+    df_processed, _ = feature_engineer.transform(
+        df,
+        interaction_context=feature_metadata.get("interaction_context", {}),
+    )
     logger.info(f"特征工程完成: {len(df_processed.columns)} 列")
 
     # 4. 预测
@@ -111,7 +124,6 @@ def main():
         ids = np.arange(len(df))
 
     # 目标变量
-    target_label = predictor.label
     y_true = df[target_label].values if target_label in df.columns else None
 
     report_generator = ModelReport(output_dir)

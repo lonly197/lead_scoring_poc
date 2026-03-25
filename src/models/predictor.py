@@ -52,6 +52,7 @@ class LeadScoringPredictor:
         self._predictor = None
         self._feature_metadata = None
         self._feature_columns: Optional[List[str]] = None
+        self._extra_metadata: Dict[str, Any] = {}
 
     @staticmethod
     def _format_column_preview(columns: List[str], limit: int = 5) -> str:
@@ -342,7 +343,9 @@ class LeadScoringPredictor:
 
         from sklearn.metrics import (
             accuracy_score,
+            balanced_accuracy_score,
             f1_score,
+            matthews_corrcoef,
             precision_score,
             recall_score,
             roc_auc_score,
@@ -365,6 +368,21 @@ class LeadScoringPredictor:
                 extra_metrics["f1"] = f1_score(
                     y_true, y_pred, average="binary", zero_division=0
                 )
+            else:
+                extra_metrics["balanced_accuracy"] = balanced_accuracy_score(y_true, y_pred)
+                extra_metrics["macro_f1"] = f1_score(
+                    y_true,
+                    y_pred,
+                    average="macro",
+                    zero_division=0,
+                )
+                extra_metrics["weighted_f1"] = f1_score(
+                    y_true,
+                    y_pred,
+                    average="weighted",
+                    zero_division=0,
+                )
+                extra_metrics["mcc"] = matthews_corrcoef(y_true, y_pred)
 
             extra_metrics["accuracy"] = accuracy_score(y_true, y_pred)
 
@@ -394,7 +412,15 @@ class LeadScoringPredictor:
         if self._predictor is None:
             raise ValueError("模型未训练，请先调用 train() 或 load()")
 
-        return self._predictor.leaderboard(test_data, silent=silent)
+        aligned_test_data = None
+        if test_data is not None:
+            aligned_test_data = self._prepare_inference_data(
+                data=test_data,
+                dataset_name="leaderboard_data",
+                include_label=True,
+            )
+
+        return self._predictor.leaderboard(aligned_test_data, silent=silent)
 
     def get_feature_importance(
         self,
@@ -431,7 +457,7 @@ class LeadScoringPredictor:
 
         return importance_df
 
-    def save(self, path: Optional[str] = None):
+    def save(self, path: Optional[str] = None, extra_metadata: Optional[Dict[str, Any]] = None):
         """
         保存模型（AutoGluon 自动保存，此方法保存额外元数据）
 
@@ -450,6 +476,9 @@ class LeadScoringPredictor:
             "weight_evaluation": self.weight_evaluation,
             "feature_columns": self._feature_columns or [],
         }
+        merged_extra_metadata = extra_metadata or self._extra_metadata
+        if merged_extra_metadata:
+            metadata["extra_metadata"] = merged_extra_metadata
 
         metadata_path = save_path / "metadata.json"
         with open(metadata_path, "w", encoding="utf-8") as f:
@@ -501,6 +530,7 @@ class LeadScoringPredictor:
         )
         instance._predictor = predictor
         instance._feature_columns = feature_columns or None
+        instance._extra_metadata = metadata.get("extra_metadata", {})
 
         logger.info(f"模型已加载: {load_path}")
         if instance.sample_weight:

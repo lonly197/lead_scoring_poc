@@ -9,6 +9,7 @@
 """
 
 import argparse
+import json
 import logging
 import pickle  # noqa: S403 - 加载 AutoGluon 模型需要
 import sys
@@ -22,7 +23,14 @@ project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
 from config.config import config, get_excluded_columns
+from src.data.label_policy import apply_ohab_label_policy
 from src.data.loader import DataLoader, FeatureEngineer
+from src.evaluation.ohab_metrics import (
+    classification_report_dict,
+    compute_class_ranking_report,
+    compute_threshold_report,
+    confusion_matrix_frame,
+)
 from src.utils.helpers import setup_logging
 
 
@@ -30,10 +38,14 @@ def load_feature_metadata(model_path: Path) -> dict:
     """加载训练时保存的特征工程元数据"""
     metadata_path = model_path / "feature_metadata.json"
     if metadata_path.exists():
-        import json
         with open(metadata_path, encoding="utf-8") as f:
             return json.load(f)
     return {}
+
+
+def dump_json(path: Path, payload: dict | list) -> None:
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2, default=str)
 
 logger = logging.getLogger(__name__)
 FINAL_ORDERED_COLUMN = "is_final_ordered"
@@ -82,6 +94,12 @@ def parse_args():
         type=str,
         default="2026-03-16",
         help="验证集截止日期（仅 --oot-test 模式使用，测试集为时间 >= valid_end）",
+    )
+    parser.add_argument(
+        "--report-topk",
+        type=str,
+        default="5,10,20",
+        help="多分类排序分析 Top 比例，逗号分隔的百分比值",
     )
 
     return parser.parse_args()
@@ -161,6 +179,7 @@ def main():
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+    top_ratios = tuple(float(item.strip()) / 100 for item in args.report_topk.split(",") if item.strip())
 
     # 1. 加载模型
     logger.info("=" * 60)
@@ -193,6 +212,8 @@ def main():
     # 自动识别防泄漏切分标记 (Smart Test Set Filtering)
     metadata = load_feature_metadata(model_path)
     split_info = metadata.get("split_info", {})
+    label_policy = metadata.get("label_policy", {})
+    interaction_context = metadata.get("interaction_context", {})
     
     if split_info:
         logger.info(f"读取到模型切分元数据，模式: {split_info.get('mode')}")
@@ -254,6 +275,10 @@ def main():
         final_ordered = df[FINAL_ORDERED_COLUMN].copy()
         logger.info(f"检测到 {FINAL_ORDERED_COLUMN}，将仅用于业务转化验证")
 
+    if label_policy:
+        df = apply_ohab_label_policy(df, target, label_policy)
+        logger.info(f"应用训练标签策略: {label_policy}")
+
     # 排除不需要的列（但保留目标列用于评估）
     excluded_columns = get_excluded_columns(target)
     cols_to_drop = [col for col in excluded_columns if col in df.columns and col != target]
@@ -266,11 +291,12 @@ def main():
     feature_engineer = FeatureEngineer(
         time_columns=config.feature.time_columns,
         numeric_columns=config.feature.numeric_features,
+        interaction_context=interaction_context,
     )
 
     # 注意：AutoGluon 自动处理类别编码和缺失值
     # FeatureEngineer 只处理时间特征提取和数值类型转换
-    df_processed, _ = feature_engineer.process(df)
+    df_processed, _ = feature_engineer.transform(df, interaction_context=interaction_context)
 
     # 保存目标值用于评估
     y_true = df_processed[target].values
@@ -312,6 +338,12 @@ def main():
 
     report = classification_report(y_true, y_pred)
     logger.info(f"\n分类报告:\n{report}")
+    confusion_df = confusion_matrix_frame(y_true, y_pred)
+    classification_dict = classification_report_dict(y_true, y_pred)
+    class_ranking_report = compute_class_ranking_report(y_true, y_proba, top_ratios=top_ratios)
+    b_threshold_report = None
+    if "B" in y_proba.columns:
+        b_threshold_report = compute_threshold_report(y_true, y_proba["B"], positive_label="B")
 
     # 5. 按类别分析
     logger.info("\n" + "=" * 60)
@@ -348,6 +380,22 @@ def main():
     results_path = output_dir / "predictions.csv"
     results_df.to_csv(results_path, index=False, encoding="utf-8-sig")
     logger.info(f"预测结果已保存: {results_path}")
+    confusion_df.to_csv(output_dir / "confusion_matrix.csv", encoding="utf-8-sig")
+    dump_json(output_dir / "classification_report.json", classification_dict)
+    dump_json(output_dir / "class_ranking_report.json", class_ranking_report)
+    if b_threshold_report is not None:
+        b_threshold_report.to_csv(output_dir / "b_threshold_report.csv", index=False, encoding="utf-8-sig")
+    dump_json(
+        output_dir / "evaluation_summary.json",
+        {
+            "accuracy": accuracy,
+            "balanced_accuracy": balanced_acc,
+            "mcc": mcc,
+            "label_policy": label_policy,
+            "split_info": split_info,
+            "top_ratios": list(top_ratios),
+        },
+    )
 
     # 评估报告
     report_path = output_dir / "evaluation_report.txt"

@@ -8,8 +8,9 @@
 """
 
 import logging
+from copy import deepcopy
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -59,6 +60,7 @@ class DataLoader:
         self.auto_adapt = auto_adapt
         self._data: Optional[pd.DataFrame] = None
         self._data_format: Optional[str] = None
+        self._adaptation_metadata: dict = {}
 
     def load(self) -> pd.DataFrame:
         """
@@ -81,7 +83,10 @@ class DataLoader:
             format_config = detect_data_format(str(self.data_path))
             self._data_format = "new" if format_config == NEW_DATA_FORMAT else "old"
             logger.info(f"检测到数据格式: {self._data_format}（适配模式）")
-            self._data = load_and_adapt_data(str(self.data_path))
+            self._data, self._adaptation_metadata = load_and_adapt_data(
+                str(self.data_path),
+                return_metadata=True,
+            )
         else:
             # 默认：保持原有加载行为
             suffix = self.data_path.suffix.lower()
@@ -106,6 +111,10 @@ class DataLoader:
             格式标识，如果尚未加载则返回 None
         """
         return self._data_format
+
+    def get_adaptation_metadata(self) -> dict:
+        """获取 auto_adapt 过程中生成的元数据。"""
+        return deepcopy(self._adaptation_metadata)
 
     def get_basic_stats(self, df: Optional[pd.DataFrame] = None) -> dict:
         """
@@ -161,6 +170,7 @@ class FeatureEngineer:
         time_columns: List[str],
         numeric_columns: Optional[List[str]] = None,
         create_interactions: bool = True,  # 是否创建交互特征
+        interaction_context: Optional[dict] = None,
     ):
         """
         初始化特征工程处理器
@@ -173,6 +183,66 @@ class FeatureEngineer:
         self.time_columns = time_columns
         self.numeric_columns = numeric_columns or []
         self.create_interactions = create_interactions
+        self.interaction_context = deepcopy(interaction_context) if interaction_context else {}
+
+    @staticmethod
+    def _build_city_car_key(city: object, car_model: object) -> str:
+        city_value = "未知" if pd.isna(city) else str(city)
+        car_value = "未知" if pd.isna(car_model) else str(car_model)
+        return f"{city_value}|||{car_value}"
+
+    def fit(self, df: pd.DataFrame) -> dict:
+        """
+        基于训练集学习交互特征所需的上下文，避免在验证/推理阶段重新拟合。
+        """
+        context: Dict[str, Dict[str, int]] = {}
+
+        if self.create_interactions and {"所在城市", "首触意向车型"}.issubset(df.columns):
+            city_car_keys = df.apply(
+                lambda row: self._build_city_car_key(row.get("所在城市"), row.get("首触意向车型")),
+                axis=1,
+            )
+            city_car_heat = city_car_keys.value_counts().astype(int).to_dict()
+            context["city_car_heat"] = city_car_heat
+
+        self.interaction_context = context
+        return deepcopy(context)
+
+    def fit_transform(self, df: pd.DataFrame) -> Tuple[pd.DataFrame, dict]:
+        """训练阶段：先学习上下文，再转换数据。"""
+        self.fit(df)
+        return self.transform(df)
+
+    def transform(
+        self,
+        df: pd.DataFrame,
+        interaction_context: Optional[dict] = None,
+    ) -> Tuple[pd.DataFrame, dict]:
+        """
+        验证/推理阶段：复用训练期上下文进行特征转换。
+        """
+        if interaction_context is not None:
+            self.interaction_context = deepcopy(interaction_context)
+
+        df = df.copy()
+        metadata = {}
+
+        df, time_features = self._extract_time_features(df)
+        metadata["time_features"] = time_features
+
+        df = self._convert_numeric_types(df)
+
+        if self.create_interactions:
+            df, interaction_features = self._create_interaction_features(
+                df,
+                interaction_context=self.interaction_context,
+            )
+            metadata["interaction_features"] = interaction_features
+            metadata["interaction_context"] = deepcopy(self.interaction_context)
+            logger.info(f"交互特征创建完成: {interaction_features}")
+
+        logger.info("特征工程完成，其余预处理由 AutoGluon 自动处理")
+        return df, metadata
 
     def process(
         self,
@@ -187,27 +257,7 @@ class FeatureEngineer:
         Returns:
             处理后的 DataFrame 和元数据
         """
-        df = df.copy()
-        metadata = {}
-
-        # 1. 时间特征提取（AutoGluon 不擅长）
-        df, time_features = self._extract_time_features(df)
-        metadata["time_features"] = time_features
-
-        # 2. 数值类型转换（确保类型正确）
-        df = self._convert_numeric_types(df)
-
-        # 3. 交互特征（新增）
-        if self.create_interactions:
-            df, interaction_features = self._create_interaction_features(df)
-            metadata["interaction_features"] = interaction_features
-            logger.info(f"交互特征创建完成: {interaction_features}")
-
-        # 注意：不再手动进行类别编码和缺失值填充
-        # 这些交给 AutoGluon 的 AutoMLPipelineFeatureGenerator 自动处理
-        logger.info("特征工程完成，其余预处理由 AutoGluon 自动处理")
-
-        return df, metadata
+        return self.fit_transform(df)
 
     def _extract_time_features(self, df: pd.DataFrame) -> Tuple[pd.DataFrame, List[str]]:
         """
@@ -269,7 +319,11 @@ class FeatureEngineer:
 
         return df
 
-    def _create_interaction_features(self, df: pd.DataFrame) -> Tuple[pd.DataFrame, List[str]]:
+    def _create_interaction_features(
+        self,
+        df: pd.DataFrame,
+        interaction_context: Optional[dict] = None,
+    ) -> Tuple[pd.DataFrame, List[str]]:
         """
         创建交互特征
 
@@ -318,10 +372,23 @@ class FeatureEngineer:
         # 3. 城市×车型热度
         if '所在城市' in df.columns and '首触意向车型' in df.columns:
             try:
-                city_car_counts = df.groupby(['所在城市', '首触意向车型']).size()
+                context = interaction_context or {}
+                city_car_heat = context.get("city_car_heat", {})
+                if not city_car_heat:
+                    logger.warning("未检测到训练期城市车型热度上下文，回退为基于当前数据拟合")
+                    city_car_keys = df.apply(
+                        lambda row: self._build_city_car_key(row.get("所在城市"), row.get("首触意向车型")),
+                        axis=1,
+                    )
+                    city_car_heat = city_car_keys.value_counts().astype(int).to_dict()
+                    self.interaction_context["city_car_heat"] = city_car_heat
+
                 df['城市车型热度'] = df.apply(
-                    lambda x: city_car_counts.get((x['所在城市'], x['首触意向车型']), 0),
-                    axis=1
+                    lambda row: city_car_heat.get(
+                        self._build_city_car_key(row.get("所在城市"), row.get("首触意向车型")),
+                        0,
+                    ),
+                    axis=1,
                 )
                 new_features.append('城市车型热度')
                 logger.debug(f"创建城市车型热度特征: 城市车型热度")
@@ -330,16 +397,16 @@ class FeatureEngineer:
 
         # 4. 通话质量特征
         if '通话次数' in df.columns and '通话总时长' in df.columns:
-            # 平均通话时长
-            df['平均通话时长'] = df['通话总时长'] / df['通话次数'].replace(0, np.nan)
-            df['平均通话时长'] = df['平均通话时长'].fillna(0)
-            new_features.append('平均通话时长')
+            # 派生平均通话时长，避免覆盖原始字段
+            df['平均通话时长_派生'] = df['通话总时长'] / df['通话次数'].replace(0, np.nan)
+            df['平均通话时长_派生'] = df['平均通话时长_派生'].fillna(0)
+            new_features.append('平均通话时长_派生')
 
             # 有效通话：通话次数>0 且 通话总时长>60秒（排除无效骚扰）
             df['有效通话'] = ((df['通话次数'] > 0) & (df['通话总时长'] > 60)).astype(int)
             new_features.append('有效通话')
 
-            logger.debug(f"创建通话质量特征: 平均通话时长, 有效通话")
+            logger.debug(f"创建通话质量特征: 平均通话时长_派生, 有效通话")
 
         return df, new_features
 
