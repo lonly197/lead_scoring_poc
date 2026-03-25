@@ -95,10 +95,10 @@ OUTPUT_DIR=./outputs
 | `OHAB_LABEL_MODE` | 评级模式 | `hab` |
 | `OHAB_ENABLE_MODEL_COMPARISON` | 是否保留基线模型对比 | `true` |
 | `OHAB_BASELINE_FAMILY` | 基线模型家族 | `gbm` |
-| `OHAB_MEMORY_LIMIT_GB` | 训练内存上限 | `12` |
+| `OHAB_MEMORY_LIMIT_GB` | 训练内存上限 | 可留空，默认自动探测 |
 | `OHAB_FIT_STRATEGY` | 模型训练策略 | `sequential` |
 | `OHAB_EXCLUDED_MODEL_TYPES` | 排除的高内存模型 | `RF,XT,KNN,FASTAI,NN_TORCH` |
-| `OHAB_NUM_FOLDS_PARALLEL` | 并行折数 | `1` |
+| `OHAB_NUM_FOLDS_PARALLEL` | 并行折数 | 可留空，默认自动探测 |
 
 ### 内置训练档位
 
@@ -107,3 +107,19 @@ OUTPUT_DIR=./outputs
 | `server_16g_compare` | 16GB 服务器正式推荐档 | `good_quality + 3 folds + baseline 对比` |
 | `server_16g_fast` | 快速验证流程 | `medium_quality + 0 folds` |
 | `lab_full_quality` | 更大机器的高质量训练 | `high_quality + 5 folds` |
+
+### 资源参数自动探测
+
+从当前版本开始，`train_ohab.py` 在未显式指定资源参数时，会先探测当前机器状态，再推导默认值：
+
+- 自动探测 `cpu_count`
+- 自动探测当前 `available_memory_gb`
+- 自动生成更保守的 `memory_limit_gb`
+- 自动生成 `num_folds_parallel`
+
+规则层面遵循：
+
+- 普通场景优先自动探测
+- 高级场景再用命令行显式覆盖
+
+也就是说，`OHAB_MEMORY_LIMIT_GB` 和 `OHAB_NUM_FOLDS_PARALLEL` 现在更适合作为“固定覆盖项”，而不是必须填写的基础配置。

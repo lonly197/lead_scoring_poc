@@ -353,6 +353,21 @@ def main():
         f"num_folds_parallel={num_folds_parallel}, "
         f"excluded_model_types={excluded_model_types}"
     )
+    detected_resources = runtime_config.get("detected_resources", {})
+    resource_tuning = runtime_config.get("resource_tuning", {})
+    logger.info(
+        "系统资源探测: "
+        f"cpu_count={detected_resources.get('cpu_count')}, "
+        f"total_memory_gb={detected_resources.get('total_memory_gb')}, "
+        f"available_memory_gb={detected_resources.get('available_memory_gb')}"
+    )
+    logger.info(
+        "资源调优结果: "
+        f"memory_limit_source={resource_tuning.get('memory_limit_source')}, "
+        f"derived_memory_limit_gb={resource_tuning.get('derived_memory_limit_gb')}, "
+        f"num_folds_parallel_source={resource_tuning.get('num_folds_parallel_source')}, "
+        f"derived_num_folds_parallel={resource_tuning.get('derived_num_folds_parallel')}"
+    )
 
     required_gb = get_preset_disk_requirement(preset)
     disk_info = check_disk_space("./", required_gb=required_gb)
@@ -617,6 +632,8 @@ def main():
                 "num_folds_parallel": num_folds_parallel,
                 "max_memory_ratio": max_memory_ratio,
                 "excluded_model_types": excluded_model_types,
+                "detected_resources": detected_resources,
+                "resource_tuning": resource_tuning,
             },
         }
         _dump_json(output_dir / "evaluation_summary.json", evaluation_summary)

@@ -123,12 +123,36 @@ uv run python scripts/run.py train_ohab --daemon \
 - `preset=good_quality`
 - `num_bag_folds=3`
 - `label_mode=hab`
-- `memory_limit_gb=12`
 - `fit_strategy=sequential`
-- `num_folds_parallel=1`
 - `excluded_model_types=RF,XT,KNN,FASTAI,NN_TORCH`
 - `enable_model_comparison=true`
 - `baseline_family=gbm`
+
+其中资源相关参数已改为自动探测：
+
+- 启动时先探测当前 `cpu_count`
+- 启动时先探测当前 `available_memory_gb`
+- 在未显式指定时，自动推导更保守的 `memory_limit_gb`
+- 在未显式指定时，自动推导 `num_folds_parallel`
+
+例如在一台 16GB 服务器上，如果当前只有约 `11GB` 可用内存，脚本通常会把：
+
+- `memory_limit_gb` 自动收敛到约 `9GB`
+- `num_folds_parallel` 自动收敛到 `1`
+
+这样做的目的，是避免把 `.env` 或训练档位里的理论上限直接硬套到当前机器状态上。
+
+如果你需要固定资源参数，命令行仍然可以覆盖自动结果：
+
+```bash
+uv run python scripts/run.py train_ohab --daemon \
+    --data-path ./data/202602~03.tsv \
+    --training-profile server_16g_compare \
+    --memory-limit-gb 10 \
+    --num-folds-parallel 1 \
+    --train-end 2026-03-15 \
+    --valid-end 2026-03-20
+```
 
 如果需要更快地做流程验证，可使用：
 
