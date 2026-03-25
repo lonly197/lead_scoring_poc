@@ -5,7 +5,28 @@ import types
 import pandas as pd
 import pytest
 
+import src.models.predictor as predictor_module
 from src.models.predictor import LeadScoringPredictor
+
+
+class FakeTrainer:
+    def __init__(self):
+        self._callback_early_stop = False
+        self.hyperparameters = {"GBM": [{}, {}], "CAT": {}}
+        self.num_stack_levels = 1
+        self.model_attributes = {
+            "FakeModel": {
+                "val_score": 0.91,
+                "fit_time": 1.5,
+                "predict_time": 0.1,
+            }
+        }
+
+    def get_model_attribute(self, model_name, attribute, default=None):
+        return self.model_attributes.get(model_name, {}).get(attribute, default)
+
+    def load_model(self, model_name):
+        return types.SimpleNamespace(**self.model_attributes.get(model_name, {}))
 
 
 class FakeTabularPredictor:
@@ -36,6 +57,50 @@ class FakeTabularPredictor:
         tuning_data = kwargs.get("tuning_data")
         self.fit_tuning_columns = list(tuning_data.columns) if tuning_data is not None else None
         self.fit_kwargs = kwargs
+        callbacks = kwargs.get("callbacks") or []
+        if callbacks:
+            trainer = FakeTrainer()
+            model = types.SimpleNamespace(name="FakeModel")
+            for callback in callbacks:
+                if hasattr(callback, "before_trainer_fit"):
+                    callback.before_trainer_fit(
+                        trainer,
+                        hyperparameters=trainer.hyperparameters,
+                        level_start=1,
+                        level_end=2,
+                    )
+                if hasattr(callback, "before_model_fit"):
+                    callback.before_model_fit(
+                        trainer,
+                        model,
+                        time_limit=kwargs.get("time_limit"),
+                        stack_name="core",
+                        level=1,
+                    )
+                elif hasattr(callback, "_before_model_fit"):
+                    callback._before_model_fit(
+                        trainer=trainer,
+                        model=model,
+                        time_limit=kwargs.get("time_limit"),
+                        stack_name="core",
+                        level=1,
+                    )
+                if hasattr(callback, "after_model_fit"):
+                    callback.after_model_fit(
+                        trainer,
+                        ["FakeModel"],
+                        stack_name="core",
+                        level=1,
+                    )
+                elif hasattr(callback, "_after_model_fit"):
+                    callback._after_model_fit(
+                        trainer=trainer,
+                        model_names=["FakeModel"],
+                        stack_name="core",
+                        level=1,
+                    )
+                if hasattr(callback, "after_trainer_fit"):
+                    callback.after_trainer_fit(trainer)
         return self
 
     def predict(self, data, model=None):
@@ -304,3 +369,81 @@ def test_train_passes_memory_and_ensemble_controls_with_autogluon_shape(monkeypa
     assert fake_predictor.fit_kwargs["excluded_model_types"] == ["RF", "XT"]
     assert fake_predictor.fit_kwargs["ag_args_ensemble"] == {"num_folds_parallel": 1}
     assert fake_predictor.fit_kwargs["ag_args_fit"] == {"max_memory_usage_ratio": 0.9}
+
+
+def test_train_injects_compatible_progress_callback(monkeypatch, tmp_path):
+    install_fake_autogluon(monkeypatch)
+
+    events = []
+
+    class FakeProgressCallback:
+        def __init__(self, time_limit=None):
+            self.time_limit = time_limit
+            events.append(("init", time_limit))
+
+        def before_trainer_fit(self, trainer, **kwargs):
+            events.append(("before_trainer_fit", sorted(kwargs)))
+
+        def _before_model_fit(self, trainer, model, time_limit=None, stack_name="core", level=1):
+            events.append(("before_model_fit", model.name, time_limit, stack_name, level))
+            return False, False
+
+        def _after_model_fit(self, trainer, model_names, stack_name="core", level=1):
+            events.append(("after_model_fit", tuple(model_names), stack_name, level))
+            return False
+
+        def after_trainer_fit(self, trainer):
+            events.append(("after_trainer_fit", True))
+
+        def get_summary(self):
+            return {
+                "total_models_trained": 1,
+                "best_model": "FakeModel",
+                "best_score": 0.91,
+                "total_time_formatted": "1秒",
+            }
+
+    progress_module = types.ModuleType("src.training.progress_callback")
+    progress_module.TrainingProgressCallback = FakeProgressCallback
+    monkeypatch.setitem(sys.modules, "src.training.progress_callback", progress_module)
+    monkeypatch.setattr(predictor_module, "_is_progress_callback_compatible", lambda cls: True)
+
+    predictor = LeadScoringPredictor(label="label", output_path=str(tmp_path))
+    predictor.train(
+        train_data=pd.DataFrame({"feat_a": [1, 2], "label": [0, 1]}),
+        presets="good_quality",
+        time_limit=7,
+    )
+
+    fake_predictor = FakeTabularPredictor.last_instance
+    assert len(fake_predictor.fit_kwargs["callbacks"]) == 1
+    assert events == [
+        ("init", 7),
+        ("before_trainer_fit", ["hyperparameters", "level_end", "level_start"]),
+        ("before_model_fit", "FakeModel", 7, "core", 1),
+        ("after_model_fit", ("FakeModel",), "core", 1),
+        ("after_trainer_fit", True),
+    ]
+
+
+def test_train_skips_incompatible_progress_callback(monkeypatch, tmp_path):
+    install_fake_autogluon(monkeypatch)
+
+    class ExplodingProgressCallback:
+        def __init__(self, time_limit=None):
+            raise AssertionError("should not be initialized")
+
+    progress_module = types.ModuleType("src.training.progress_callback")
+    progress_module.TrainingProgressCallback = ExplodingProgressCallback
+    monkeypatch.setitem(sys.modules, "src.training.progress_callback", progress_module)
+    monkeypatch.setattr(predictor_module, "_is_progress_callback_compatible", lambda cls: False)
+
+    predictor = LeadScoringPredictor(label="label", output_path=str(tmp_path))
+    predictor.train(
+        train_data=pd.DataFrame({"feat_a": [1, 2], "label": [0, 1]}),
+        presets="good_quality",
+        time_limit=5,
+    )
+
+    fake_predictor = FakeTabularPredictor.last_instance
+    assert fake_predictor.fit_kwargs["callbacks"] == []

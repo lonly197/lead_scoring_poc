@@ -55,6 +55,8 @@ class TrainingProgressCallback(AbstractCallback):
         self.current_model: Optional[str] = None
         self.train_start_time: Optional[float] = None
         self.model_start_time: Optional[float] = None
+        self.total_models_estimate: Optional[int] = None
+        self.trainer = None
 
         # 预设模型列表（根据 preset 推断）
         self._preset_models = {
@@ -64,8 +66,29 @@ class TrainingProgressCallback(AbstractCallback):
             "medium_quality": 8,
         }
 
-    def _before_model_fit(self, model_name: str, **kwargs) -> None:
-        """模型训练前调用"""
+    def before_trainer_fit(self, trainer, **kwargs):
+        """训练开始前初始化状态。"""
+        self.trainer = trainer
+        self.models_completed = []
+        self.model_scores = {}
+        self.current_model = None
+        self.train_start_time = time.time()
+        self.model_start_time = None
+        self.total_models_estimate = self._estimate_total_models(
+            trainer=trainer,
+            trainer_kwargs=kwargs,
+        )
+
+    def _before_model_fit(
+        self,
+        trainer,
+        model,
+        time_limit: Optional[float] = None,
+        stack_name: str = "core",
+        level: int = 1,
+    ) -> tuple[bool, bool]:
+        """模型训练前调用。"""
+        model_name = getattr(model, "name", str(model))
         self.current_model = model_name
         self.model_start_time = time.time()
 
@@ -73,7 +96,7 @@ class TrainingProgressCallback(AbstractCallback):
             self.train_start_time = time.time()
 
         # 计算进度
-        total_models = self._estimate_total_models()
+        total_models = self.total_models_estimate or self._estimate_total_models(trainer=trainer)
         completed = len(self.models_completed)
         progress_pct = (completed / total_models * 100) if total_models > 0 else 0
 
@@ -87,6 +110,8 @@ class TrainingProgressCallback(AbstractCallback):
             remaining_models = total_models - completed
             estimated_remaining = avg_time_per_model * remaining_models
             remaining_str = self._format_duration(estimated_remaining)
+        elif time_limit is not None:
+            remaining_str = self._format_duration(max(float(time_limit), 0.0))
         else:
             remaining_str = "计算中..."
 
@@ -99,51 +124,100 @@ class TrainingProgressCallback(AbstractCallback):
             elapsed=elapsed_str,
             remaining=remaining_str,
         )
+        return False, False
 
     def _after_model_fit(
         self,
-        model_name: str,
-        score: Optional[float] = None,
-        fit_time: Optional[float] = None,
-        pred_time: Optional[float] = None,
-        **kwargs
-    ) -> None:
-        """模型训练后调用"""
-        self.models_completed.append(model_name)
-        if score is not None:
-            self.model_scores[model_name] = score
+        trainer,
+        model_names: list[str],
+        stack_name: str = "core",
+        level: int = 1,
+    ) -> bool:
+        """模型训练后调用。"""
+        if not model_names:
+            self._print_model_skipped(stack_name=stack_name, level=level)
+            return False
 
-        # 计算该模型耗时
-        model_time = 0
-        if self.model_start_time:
-            model_time = time.time() - self.model_start_time
+        for model_name in model_names:
+            self.models_completed.append(model_name)
+            score = self._get_model_attribute(trainer, model_name, "val_score")
+            fit_time = self._get_model_attribute(trainer, model_name, "fit_time")
+            pred_time = self._get_model_attribute(trainer, model_name, "predict_time")
 
-        # 输出模型完成信息
-        self._print_model_complete(
-            model_name=model_name,
-            score=score,
-            fit_time=fit_time or model_time,
-            pred_time=pred_time,
-        )
+            if score is not None:
+                self.model_scores[model_name] = score
 
-        # 每隔一定数量输出最佳模型
+            # 若 trainer 未提供 fit_time，退回到本地计时。
+            model_time = 0
+            if self.model_start_time:
+                model_time = time.time() - self.model_start_time
+
+            self._print_model_complete(
+                model_name=model_name,
+                score=score,
+                fit_time=fit_time if fit_time is not None else model_time,
+                pred_time=pred_time,
+            )
+
         if len(self.models_completed) % self.log_interval == 0:
             self._print_best_model()
 
-    def _estimate_total_models(self) -> int:
-        """估算总模型数"""
-        # 从 trainer 获取（如果可用）
-        if hasattr(self, 'trainer') and self.trainer is not None:
+        return False
+
+    def _get_model_attribute(self, trainer, model_name: str, attribute: str) -> Optional[float]:
+        """尽量从 trainer 或 model artifact 中读取模型属性。"""
+        if hasattr(trainer, "get_model_attribute"):
             try:
-                # 尝试从 hyperparameters 推断
-                hp = getattr(self.trainer, 'hyperparameters', {})
-                if hp:
-                    count = sum(len(v) if isinstance(v, list) else 1 for v in hp.values())
-                    # 考虑 stacking 层数
-                    stack_levels = getattr(self.trainer, 'num_stack_levels', 1)
-                    return count * (stack_levels + 1) + (stack_levels + 1)  # 加上 ensemble 模型
+                value = trainer.get_model_attribute(model_name, attribute, default=None)
+            except TypeError:
+                try:
+                    value = trainer.get_model_attribute(model_name, attribute)
+                except Exception:
+                    value = None
             except Exception:
-                pass
+                value = None
+            if value is not None:
+                return value
+
+        if hasattr(trainer, "load_model"):
+            try:
+                model = trainer.load_model(model_name)
+            except Exception:
+                return None
+            return getattr(model, attribute, None)
+
+        return None
+
+    def _estimate_total_models(self, trainer=None, trainer_kwargs: Optional[Dict[str, Any]] = None) -> int:
+        """估算总模型数"""
+        hp = None
+        if trainer_kwargs:
+            candidate = trainer_kwargs.get("hyperparameters")
+            if isinstance(candidate, dict):
+                hp = candidate
+        if hp is None and trainer is not None:
+            candidate = getattr(trainer, "hyperparameters", None)
+            if isinstance(candidate, dict):
+                hp = candidate
+
+        if hp:
+            count = sum(len(v) if isinstance(v, list) else 1 for v in hp.values())
+            num_levels = None
+
+            if trainer_kwargs:
+                level_start = trainer_kwargs.get("level_start")
+                level_end = trainer_kwargs.get("level_end")
+                if isinstance(level_start, int) and isinstance(level_end, int) and level_end >= level_start:
+                    num_levels = level_end - level_start + 1
+
+            if num_levels is None and trainer is not None:
+                stack_levels = getattr(trainer, "num_stack_levels", None)
+                if isinstance(stack_levels, int) and stack_levels >= 0:
+                    num_levels = stack_levels + 1
+
+            if num_levels:
+                # 每层通常会多一个 WeightedEnsemble。
+                return count * num_levels + num_levels
 
         # 默认返回 good_quality 的估算值
         return self._preset_models.get("good_quality", 12)
@@ -204,6 +278,16 @@ class TrainingProgressCallback(AbstractCallback):
 
         logger.info(f"🏆 当前最佳: {short_name} | 分数: {best_score:.4f}")
 
+    def _print_model_skipped(self, stack_name: str, level: int) -> None:
+        """打印模型跳过/失败信息。"""
+        short_name = self._shorten_model_name(self.current_model or "未知模型")
+        logger.warning(
+            "⚠️ 跳过/失败: %s | stack=%s | level=L%s",
+            short_name,
+            stack_name,
+            level,
+        )
+
     def _is_best_score(self, score: Optional[float]) -> bool:
         """判断是否为最佳分数"""
         if score is None or not self.model_scores:
@@ -244,6 +328,7 @@ class TrainingProgressCallback(AbstractCallback):
             "scores": self.model_scores,
             "best_model": best_model,
             "best_score": best_score,
+            "estimated_total_models": self.total_models_estimate,
             "total_time_seconds": elapsed,
             "total_time_formatted": self._format_duration(elapsed),
         }

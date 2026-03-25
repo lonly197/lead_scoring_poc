@@ -4,6 +4,7 @@ AutoGluon 模型封装模块
 封装 AutoGluon TabularPredictor 的训练、预测、评估等功能。
 """
 
+import inspect
 import json
 import logging
 from pathlib import Path
@@ -13,6 +14,53 @@ import numpy as np
 import pandas as pd
 
 logger = logging.getLogger(__name__)
+
+
+def _hook_params_without_self(method) -> list[inspect.Parameter]:
+    return list(inspect.signature(method).parameters.values())[1:]
+
+
+def _callback_hook_is_compatible(base_hook, callback_hook) -> bool:
+    """检查 callback hook 是否兼容当前 AutoGluon 基类签名。"""
+    base_params = _hook_params_without_self(base_hook)
+    callback_params = _hook_params_without_self(callback_hook)
+    callback_by_name = {param.name: param for param in callback_params}
+
+    for base_param in base_params:
+        callback_param = callback_by_name.get(base_param.name)
+        if callback_param is None:
+            return False
+        if callback_param.kind not in (
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            inspect.Parameter.KEYWORD_ONLY,
+        ):
+            return False
+
+    return True
+
+
+def _is_progress_callback_compatible(callback_cls) -> bool:
+    """基于当前 AutoGluon 版本探测 progress callback 是否可安全注入。"""
+    try:
+        from autogluon.core.callbacks import AbstractCallback
+    except Exception as exc:
+        logger.debug("无法导入 AutoGluon 回调基类，跳过训练进度监控: %s", exc)
+        return False
+
+    try:
+        before_ok = _callback_hook_is_compatible(
+            AbstractCallback._before_model_fit,
+            callback_cls._before_model_fit,
+        )
+        after_ok = _callback_hook_is_compatible(
+            AbstractCallback._after_model_fit,
+            callback_cls._after_model_fit,
+        )
+    except Exception as exc:
+        logger.debug("检查训练进度回调兼容性失败: %s", exc)
+        return False
+
+    return before_ok and after_ok
 
 
 class LeadScoringPredictor:
@@ -291,14 +339,19 @@ class LeadScoringPredictor:
         callbacks = fit_kwargs.pop("callbacks", None)
         if callbacks is None:
             callbacks = []
+        else:
+            callbacks = list(callbacks)
         if not any(hasattr(cb, '__class__') and 'Progress' in cb.__class__.__name__ for cb in callbacks):
             try:
                 from src.training.progress_callback import TrainingProgressCallback
-                progress_callback = TrainingProgressCallback(time_limit=time_limit)
-                callbacks.append(progress_callback)
-                logger.info("已启用训练进度监控")
-            except ImportError:
-                logger.debug("进度监控模块未找到，跳过")
+                if _is_progress_callback_compatible(TrainingProgressCallback):
+                    progress_callback = TrainingProgressCallback(time_limit=time_limit)
+                    callbacks.append(progress_callback)
+                    logger.info("已启用训练进度监控")
+                else:
+                    logger.warning("训练进度回调与当前 AutoGluon 版本不兼容，已跳过进度监控")
+            except Exception as exc:
+                logger.warning("初始化训练进度回调失败，已跳过进度监控: %s", exc)
 
         fit_kwargs["callbacks"] = callbacks
 

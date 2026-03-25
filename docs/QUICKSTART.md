@@ -82,7 +82,7 @@ uv run python scripts/run.py train_ohab --daemon --preset high_quality
 
 **服务器端最简单闭环**
 
-如果服务器已经按最新 [.env.example](/Users/lpp/workspace/lonly/lead_scoring_poc/.env.example) 部署好 `DATA_PATH` 和 `OHAB_*` 环境变量，那么训练、验证、报告生成三步都可以直接使用默认参数，就能满足 `baseline vs best` 对比需求。
+如果服务器已经按最新 [.env.example](../.env.example) 部署好 `DATA_PATH` 和 `OHAB_*` 环境变量，那么训练、验证、报告生成三步都可以直接使用默认参数，就能满足 `baseline vs best` 对比需求。
 
 ```bash
 # 1. 训练：后台启动 HAB 模型（默认使用 .env 中的 DATA_PATH + server_16g_compare）
