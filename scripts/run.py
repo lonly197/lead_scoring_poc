@@ -177,6 +177,23 @@ def main():
         type=str,
         help="验证集截止日期（OOT验证专用）",
     )
+    parser.add_argument(
+        "--label-mode",
+        type=str,
+        choices=["hab", "ohab"],
+        help="标签模式（train_ohab 专用）",
+    )
+    parser.add_argument(
+        "--enable-model-comparison",
+        action="store_true",
+        help="启用基线模型对比（train_ohab 专用）",
+    )
+    parser.add_argument(
+        "--baseline-family",
+        type=str,
+        choices=["gbm", "cat", "xgb", "auto"],
+        help="基线模型家族（train_ohab 专用）",
+    )
 
     args = parser.parse_args()
 
@@ -219,6 +236,12 @@ def main():
         pass_args.extend(["--train-end", args.train_end])
     if args.valid_end:
         pass_args.extend(["--valid-end", args.valid_end])
+    if args.label_mode:
+        pass_args.extend(["--label-mode", args.label_mode])
+    if args.enable_model_comparison:
+        pass_args.append("--enable-model-comparison")
+    if args.baseline_family:
+        pass_args.extend(["--baseline-family", args.baseline_family])
 
     # 运行
     if args.daemon:
