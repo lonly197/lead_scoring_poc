@@ -417,14 +417,25 @@ def format_duration(start_time: str, end_time: Optional[str] = None) -> str:
     格式化持续时间
 
     Args:
-        start_time: 开始时间（ISO 格式）
+        start_time: 开始时间（ISO 格式，支持带时区或不带时区）
         end_time: 结束时间（可选）
 
     Returns:
         格式化的持续时间字符串
     """
     start = datetime.fromisoformat(start_time)
-    end = datetime.fromisoformat(end_time) if end_time else datetime.now()
+
+    if end_time:
+        end = datetime.fromisoformat(end_time)
+    else:
+        # 根据输入时间的类型决定使用哪种当前时间
+        if start.tzinfo is not None:
+            # 输入带时区，使用带时区的当前时间
+            end = get_local_now()
+        else:
+            # 输入无时区，使用 naive 当前时间（兼容旧数据）
+            end = datetime.now()
+
     delta = end - start
 
     hours, remainder = divmod(int(delta.total_seconds()), 3600)
