@@ -1,4 +1,5 @@
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -113,3 +114,27 @@ def test_run_py_passes_ohab_resource_profile_args(monkeypatch):
         "--num-folds-parallel",
         "1",
     ]
+
+
+def test_run_background_disables_console_logging(monkeypatch, tmp_path):
+    captured = {}
+
+    class FakeProcess:
+        pid = 1234
+
+    def fake_popen(cmd, stdout, stderr, start_new_session, env):
+        captured["cmd"] = cmd
+        captured["stderr"] = stderr
+        captured["start_new_session"] = start_new_session
+        captured["env_flag"] = env.get("LEAD_SCORING_DISABLE_CONSOLE_LOG")
+        return FakeProcess()
+
+    monkeypatch.setattr(run_script.subprocess, "Popen", fake_popen)
+    pid = run_script.run_background(
+        script_path=str(Path("scripts/train_ohab.py")),
+        args=["--preset", "good_quality"],
+        log_dir=str(tmp_path),
+    )
+
+    assert pid == 1234
+    assert captured["env_flag"] == "1"

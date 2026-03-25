@@ -10,6 +10,7 @@ AutoGluon 训练进度监控回调
 
 import logging
 import time
+from collections import Counter, defaultdict
 from typing import Any, Dict, List, Optional
 
 from autogluon.core.callbacks import AbstractCallback
@@ -57,6 +58,10 @@ class TrainingProgressCallback(AbstractCallback):
         self.model_start_time: Optional[float] = None
         self.total_models_estimate: Optional[int] = None
         self.trainer = None
+        self.started_models: List[str] = []
+        self.planned_family_counts: Counter[str] = Counter()
+        self.completed_family_counts: Counter[str] = Counter()
+        self.family_fit_times: dict[str, list[float]] = defaultdict(list)
 
         # 预设模型列表（根据 preset 推断）
         self._preset_models = {
@@ -64,6 +69,18 @@ class TrainingProgressCallback(AbstractCallback):
             "high_quality": 20,
             "good_quality": 12,    # L1(5) + L1_ensemble(1) + L2(5) + L2_ensemble(1)
             "medium_quality": 8,
+        }
+        self._family_time_priors = {
+            "lightgbm": 20.0,
+            "catboost": 180.0,
+            "xgboost": 1800.0,
+            "weightedensemble": 5.0,
+            "nn_torch": 600.0,
+            "fastai": 900.0,
+            "rf": 120.0,
+            "xt": 120.0,
+            "knn": 60.0,
+            "other": 60.0,
         }
 
     def before_trainer_fit(self, trainer, **kwargs):
@@ -74,9 +91,16 @@ class TrainingProgressCallback(AbstractCallback):
         self.current_model = None
         self.train_start_time = time.time()
         self.model_start_time = None
-        self.total_models_estimate = self._estimate_total_models(
+        self.started_models = []
+        self.completed_family_counts = Counter()
+        self.family_fit_times = defaultdict(list)
+        self.planned_family_counts = self._estimate_planned_family_counts(
             trainer=trainer,
             trainer_kwargs=kwargs,
+        )
+        self.total_models_estimate = max(
+            sum(self.planned_family_counts.values()),
+            self._estimate_total_models(trainer=trainer, trainer_kwargs=kwargs),
         )
 
     def _before_model_fit(
@@ -91,9 +115,13 @@ class TrainingProgressCallback(AbstractCallback):
         model_name = getattr(model, "name", str(model))
         self.current_model = model_name
         self.model_start_time = time.time()
+        if model_name not in self.started_models:
+            self.started_models.append(model_name)
 
         if self.train_start_time is None:
             self.train_start_time = time.time()
+
+        self._ensure_capacity_for_model(model_name)
 
         # 计算进度
         total_models = self.total_models_estimate or self._estimate_total_models(trainer=trainer)
@@ -105,10 +133,8 @@ class TrainingProgressCallback(AbstractCallback):
         elapsed_str = self._format_duration(elapsed)
 
         # 计算预估剩余时间
-        if completed > 0 and elapsed > 0:
-            avg_time_per_model = elapsed / completed
-            remaining_models = total_models - completed
-            estimated_remaining = avg_time_per_model * remaining_models
+        estimated_remaining = self._estimate_remaining_seconds(trainer=trainer)
+        if estimated_remaining is not None:
             remaining_str = self._format_duration(estimated_remaining)
         elif time_limit is not None:
             remaining_str = self._format_duration(max(float(time_limit), 0.0))
@@ -140,6 +166,8 @@ class TrainingProgressCallback(AbstractCallback):
 
         for model_name in model_names:
             self.models_completed.append(model_name)
+            family = self._normalize_family_from_model_name(model_name)
+            self.completed_family_counts[family] += 1
             score = self._get_model_attribute(trainer, model_name, "val_score")
             fit_time = self._get_model_attribute(trainer, model_name, "fit_time")
             pred_time = self._get_model_attribute(trainer, model_name, "predict_time")
@@ -151,6 +179,10 @@ class TrainingProgressCallback(AbstractCallback):
             model_time = 0
             if self.model_start_time:
                 model_time = time.time() - self.model_start_time
+            if fit_time is not None:
+                self.family_fit_times[family].append(float(fit_time))
+            elif model_time > 0:
+                self.family_fit_times[family].append(float(model_time))
 
             self._print_model_complete(
                 model_name=model_name,
@@ -190,6 +222,21 @@ class TrainingProgressCallback(AbstractCallback):
 
     def _estimate_total_models(self, trainer=None, trainer_kwargs: Optional[Dict[str, Any]] = None) -> int:
         """估算总模型数"""
+        planned_family_counts = self._estimate_planned_family_counts(
+            trainer=trainer,
+            trainer_kwargs=trainer_kwargs,
+        )
+        if planned_family_counts:
+            return sum(planned_family_counts.values())
+
+        # 默认返回 good_quality 的估算值
+        return self._preset_models.get("good_quality", 12)
+
+    def _estimate_planned_family_counts(
+        self,
+        trainer=None,
+        trainer_kwargs: Optional[Dict[str, Any]] = None,
+    ) -> Counter[str]:
         hp = None
         if trainer_kwargs:
             candidate = trainer_kwargs.get("hyperparameters")
@@ -200,27 +247,146 @@ class TrainingProgressCallback(AbstractCallback):
             if isinstance(candidate, dict):
                 hp = candidate
 
-        if hp:
-            count = sum(len(v) if isinstance(v, list) else 1 for v in hp.values())
-            num_levels = None
+        if not hp:
+            return Counter()
 
-            if trainer_kwargs:
-                level_start = trainer_kwargs.get("level_start")
-                level_end = trainer_kwargs.get("level_end")
-                if isinstance(level_start, int) and isinstance(level_end, int) and level_end >= level_start:
-                    num_levels = level_end - level_start + 1
+        level_start = trainer_kwargs.get("level_start") if trainer_kwargs else None
+        level_end = trainer_kwargs.get("level_end") if trainer_kwargs else None
+        level_count = None
+        if isinstance(level_start, int) and isinstance(level_end, int) and level_end >= level_start:
+            level_count = level_end - level_start + 1
 
-            if num_levels is None and trainer is not None:
-                stack_levels = getattr(trainer, "num_stack_levels", None)
-                if isinstance(stack_levels, int) and stack_levels >= 0:
-                    num_levels = stack_levels + 1
+        return self._count_planned_families(hp, level_count=level_count)
 
-            if num_levels:
-                # 每层通常会多一个 WeightedEnsemble。
-                return count * num_levels + num_levels
+    def _count_planned_families(self, hp: dict[str, Any], level_count: Optional[int] = None) -> Counter[str]:
+        if not isinstance(hp, dict) or not hp:
+            return Counter()
 
-        # 默认返回 good_quality 的估算值
-        return self._preset_models.get("good_quality", 12)
+        if all(isinstance(key, int) for key in hp):
+            counts = Counter()
+            for level_key in sorted(hp):
+                counts.update(self._count_planned_families(hp[level_key]))
+                counts["weightedensemble"] += 1
+            return counts
+
+        counts = Counter()
+        for family, config in hp.items():
+            counts[self._normalize_family_from_hyperparameter(family)] += self._count_model_configs(config)
+
+        if level_count and level_count > 1:
+            multiplied = Counter({family: count * level_count for family, count in counts.items()})
+            multiplied["weightedensemble"] += level_count
+            return multiplied
+
+        return counts
+
+    def _count_model_configs(self, config: Any) -> int:
+        if isinstance(config, list):
+            return len(config) or 1
+        if isinstance(config, dict):
+            if config and all(isinstance(key, int) for key in config):
+                nested = Counter()
+                for level_key in sorted(config):
+                    nested.update(self._count_planned_families(config[level_key]))
+                    nested["weightedensemble"] += 1
+                return sum(nested.values())
+            return 1
+        return 1
+
+    def _normalize_family_from_hyperparameter(self, family: str) -> str:
+        normalized = str(family).upper()
+        if normalized == "GBM":
+            return "lightgbm"
+        if normalized == "CAT":
+            return "catboost"
+        if normalized == "XGB":
+            return "xgboost"
+        if normalized == "NN_TORCH":
+            return "nn_torch"
+        if normalized == "FASTAI":
+            return "fastai"
+        if normalized == "RF":
+            return "rf"
+        if normalized == "XT":
+            return "xt"
+        if normalized == "KNN":
+            return "knn"
+        return normalized.lower()
+
+    def _normalize_family_from_model_name(self, model_name: str) -> str:
+        if model_name.startswith("WeightedEnsemble"):
+            return "weightedensemble"
+        if model_name.startswith("LightGBM"):
+            return "lightgbm"
+        if model_name.startswith("CatBoost"):
+            return "catboost"
+        if model_name.startswith("XGBoost"):
+            return "xgboost"
+        if model_name.startswith("NeuralNetTorch") or model_name.startswith("NN_TORCH"):
+            return "nn_torch"
+        if model_name.startswith("NeuralNetFastAI") or model_name.startswith("FASTAI"):
+            return "fastai"
+        if model_name.startswith("RandomForest"):
+            return "rf"
+        if model_name.startswith("ExtraTrees"):
+            return "xt"
+        if model_name.startswith("KNeighbors"):
+            return "knn"
+        return "other"
+
+    def _ensure_capacity_for_model(self, model_name: str) -> None:
+        family = self._normalize_family_from_model_name(model_name)
+        observed_count = sum(1 for name in self.started_models if self._normalize_family_from_model_name(name) == family)
+        if observed_count > self.planned_family_counts.get(family, 0):
+            self.planned_family_counts[family] = observed_count
+        planned_total = sum(self.planned_family_counts.values())
+        started_total = len(self.started_models)
+        self.total_models_estimate = max(
+            self.total_models_estimate or 0,
+            planned_total,
+            started_total,
+        )
+
+    def _estimate_remaining_seconds(self, trainer=None) -> Optional[float]:
+        remaining_by_plan = 0.0
+        has_remaining_plan = False
+        for family, planned_count in self.planned_family_counts.items():
+            remaining_count = max(planned_count - self.completed_family_counts.get(family, 0), 0)
+            if remaining_count <= 0:
+                continue
+            remaining_by_plan += remaining_count * self._estimate_family_duration(family)
+            has_remaining_plan = True
+
+        trainer_remaining = self._trainer_remaining_time(trainer)
+        if has_remaining_plan and trainer_remaining is not None:
+            return max(0.0, min(remaining_by_plan, trainer_remaining))
+        if has_remaining_plan:
+            return max(0.0, remaining_by_plan)
+        if trainer_remaining is not None:
+            return max(0.0, trainer_remaining)
+        return None
+
+    def _estimate_family_duration(self, family: str) -> float:
+        observed = self.family_fit_times.get(family)
+        if observed:
+            return sum(observed) / len(observed)
+        return self._family_time_priors.get(family, self._family_time_priors["other"])
+
+    def _trainer_remaining_time(self, trainer) -> Optional[float]:
+        if trainer is None:
+            trainer = self.trainer
+        if trainer is None:
+            return None
+
+        total_limit = getattr(trainer, "_time_limit", None)
+        train_start = getattr(trainer, "_time_train_start", None)
+        if total_limit is None or train_start is None:
+            return None
+        try:
+            remaining = float(total_limit) - (time.time() - float(train_start))
+        except (TypeError, ValueError):
+            return None
+        return max(0.0, remaining)
 
     def _print_progress(
         self,

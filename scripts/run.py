@@ -7,6 +7,7 @@
 """
 
 import argparse
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -60,11 +61,15 @@ def run_background(script_path: str, args: list[str], log_dir: str = "./outputs/
         f.write("=" * 60 + "\n\n")
         f.flush()
 
+        child_env = dict(os.environ)
+        child_env["LEAD_SCORING_DISABLE_CONSOLE_LOG"] = "1"
+
         process = subprocess.Popen(
             cmd,
             stdout=f,
             stderr=subprocess.STDOUT,
             start_new_session=True,
+            env=child_env,
         )
 
     print(f"进程 ID: {process.pid}")

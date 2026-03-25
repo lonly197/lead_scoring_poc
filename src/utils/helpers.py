@@ -38,14 +38,16 @@ def setup_logging(
     # 清除已有处理器（避免重复添加）
     logger.handlers.clear()
 
-    # 控制台处理器
-    console_handler = logging.StreamHandler()
-    console_handler.setLevel(level)
     console_format = logging.Formatter(
         "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
     )
-    console_handler.setFormatter(console_format)
-    logger.addHandler(console_handler)
+
+    disable_console_log = os.getenv("LEAD_SCORING_DISABLE_CONSOLE_LOG") == "1"
+    if not disable_console_log:
+        console_handler = logging.StreamHandler()
+        console_handler.setLevel(level)
+        console_handler.setFormatter(console_format)
+        logger.addHandler(console_handler)
 
     # 文件处理器
     if log_file:
