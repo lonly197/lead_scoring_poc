@@ -87,6 +87,20 @@ uv run python scripts/run.py train_ohab --daemon \
 
 这套组合针对当前 16GB / 8 核 / CPU-only 服务器做过收敛，优先保证训练稳定性和基线对比可复现性，不建议直接切到 `high_quality`。
 
+### 业务指标受控实验档
+
+如果需要验证“训练阶段直接按业务更关注的 `balanced_accuracy` 选模型”是否会优于当前默认档，可使用受控实验档：
+
+```bash
+uv run python scripts/run.py train_ohab --daemon \
+    --data-path ./data/202602~03.tsv \
+    --training-profile server_16g_compare_balanced \
+    --train-end 2026-03-15 \
+    --valid-end 2026-03-20
+```
+
+该档位除 `eval_metric=balanced_accuracy` 外，其他资源约束、模型池和对比输出都与 `server_16g_compare` 保持一致，适合做一轮并排 A/B 验证。
+
 ### 资源自适应控制
 
 内存控制参数现在支持**所有**训练任务（train_arrive, train_ohab, train_test_drive），帮助在资源受限的环境下稳定运行：
@@ -128,6 +142,12 @@ uv run python scripts/validate_model.py \
     --model-path ./outputs/models/ohab_model \
     --data-path ./data/202603.tsv
 ```
+
+> 当前验证脚本会同时保留：
+> - `technical_best_model`：AutoGluon 内部优化目标下的最优模型
+> - `business_recommended_model`：客户报告和主输出默认采用的业务推荐模型
+>
+> `predictions.csv`、`lead_actions.csv`、`hab_bucket_summary.csv` 和客户版报告都会默认跟随 `business_recommended_model`。
 
 ### 进阶：严格 OOT 验证（防泄露）
 在评估 OOT 效果时，必须开启 `--oot-test` 标志，以确保仅评估测试集（时间 >= valid_end）范围内的数据：

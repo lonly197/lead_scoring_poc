@@ -45,10 +45,21 @@ def test_generate_business_report_reads_structured_outputs(tmp_path, monkeypatch
     (validation_dir / "evaluation_summary.json").write_text(
         json.dumps(
             {
-                "metrics": {
+                "technical_best_model": "WeightedEnsemble_L2",
+                "business_recommended_model": "LightGBM",
+                "report_primary_role": "baseline",
+                "primary_metrics": {
                     "balanced_accuracy": 0.58,
-                    "macro avg": {"f1-score": 0.57},
-                }
+                    "macro_f1": 0.57,
+                },
+                "business_kpis": {
+                    "h_arrive_lift": 1.8,
+                    "h_drive_lift": 2.1,
+                    "ha_arrive_capture": 0.82,
+                    "ha_drive_capture": 0.79,
+                    "b_bucket_share": 0.30,
+                    "client_layering_message": "已形成初步分层效果，H/A 边界仍需二期优化",
+                },
             },
             ensure_ascii=False,
         ),
@@ -66,7 +77,7 @@ def test_generate_business_report_reads_structured_outputs(tmp_path, monkeypatch
         encoding="utf-8",
     )
     (validation_dir / "monotonicity_check.json").write_text(
-        json.dumps({"message": "H/A/B 分层单调"}, ensure_ascii=False),
+        json.dumps({"message": "H/A/B 分层未形成单调"}, ensure_ascii=False),
         encoding="utf-8",
     )
     (validation_dir / "model_comparison.json").write_text(
@@ -78,6 +89,11 @@ def test_generate_business_report_reads_structured_outputs(tmp_path, monkeypatch
                     "balanced_accuracy": 0.51,
                     "macro_f1": 0.49,
                     "b_recall": 0.08,
+                    "h_arrive_lift": 1.8,
+                    "h_drive_lift": 2.1,
+                    "ha_arrive_capture": 0.82,
+                    "ha_drive_capture": 0.79,
+                    "b_bucket_share": 0.30,
                 },
                 {
                     "role": "best",
@@ -85,6 +101,11 @@ def test_generate_business_report_reads_structured_outputs(tmp_path, monkeypatch
                     "balanced_accuracy": 0.58,
                     "macro_f1": 0.57,
                     "b_recall": 0.14,
+                    "h_arrive_lift": 1.4,
+                    "h_drive_lift": 1.5,
+                    "ha_arrive_capture": 0.74,
+                    "ha_drive_capture": 0.70,
+                    "b_bucket_share": 0.18,
                 },
             ],
             ensure_ascii=False,
@@ -107,5 +128,11 @@ def test_generate_business_report_reads_structured_outputs(tmp_path, monkeypatch
 
     content = output_path.read_text(encoding="utf-8")
     assert "HAB 线索评级 POC 业务报告" in content
-    assert "基线模型 vs 最优模型" in content
+    assert "业务推荐模型" in content
+    assert "自动寻优候选模型" in content
+    assert "H+A 转化覆盖率" in content
+    assert "B 桶降频空间" in content
     assert "24小时内优先跟进" in content
+    assert "基线模型 vs 最优模型" not in content
+    assert "分层未形成单调" not in content
+    assert "classification_report" not in content

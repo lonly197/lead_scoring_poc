@@ -9,6 +9,7 @@ def _make_args(**overrides):
         training_profile=None,
         preset=None,
         time_limit=None,
+        eval_metric=None,
         num_bag_folds=None,
         label_mode=None,
         enable_model_comparison=None,
@@ -48,6 +49,7 @@ def test_resolve_training_config_uses_server_16g_compare_defaults(monkeypatch):
     assert resolved["training_profile"] == "server_16g_compare"
     assert resolved["preset"] == "good_quality"
     assert resolved["time_limit"] == 5400
+    assert resolved["eval_metric"] == "log_loss"
     assert resolved["num_bag_folds"] == 3
     assert resolved["enable_model_comparison"] is True
     assert resolved["baseline_family"] == "gbm"
@@ -129,6 +131,22 @@ def test_resolve_training_config_probe_profile_restores_only_nn_torch(monkeypatc
     assert resolved["fit_strategy"] == "sequential"
     assert resolved["num_folds_parallel"] == 1
     assert resolved["excluded_model_types"] == ["RF", "XT", "KNN", "FASTAI"]
+
+
+def test_resolve_training_config_balanced_profile_switches_eval_metric(monkeypatch):
+    monkeypatch.delenv("OHAB_MEMORY_LIMIT_GB", raising=False)
+    monkeypatch.delenv("OHAB_NUM_FOLDS_PARALLEL", raising=False)
+    monkeypatch.setattr(
+        ohab_runtime,
+        "detect_system_resources",
+        lambda: {"cpu_count": 8, "total_memory_gb": 15.45, "available_memory_gb": 10.96},
+    )
+
+    resolved = resolve_training_config(_make_args(training_profile="server_16g_compare_balanced"))
+
+    assert resolved["training_profile"] == "server_16g_compare_balanced"
+    assert resolved["eval_metric"] == "balanced_accuracy"
+    assert resolved["enable_model_comparison"] is True
 
 
 def test_resolve_training_config_normalizes_lightgbm_alias(monkeypatch):

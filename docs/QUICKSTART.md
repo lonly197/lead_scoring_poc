@@ -113,6 +113,12 @@ uv run python scripts/generate_business_report.py
 - `outputs/validation/predictions_best.csv`
 - `outputs/reports/hab_poc_report.md`
 
+补充说明：
+
+- `outputs/validation/model_comparison.csv` 仍保留 `baseline` 与 `best` 的技术对比结果；
+- `outputs/validation/predictions.csv`、`lead_actions.csv`、`hab_bucket_summary.csv` 默认改为跟随 `business_recommended_model`；
+- 客户版 `hab_poc_report.md` 默认以“业务推荐模型”作为主口径，不再直接把 AutoGluon 的 internal best 放在主位。
+
 **推荐切分策略**：
 
 对 `202602~03.tsv` 这类跨月数据，建议固定手动 OOT 切分，保证每次汇报口径一致。
@@ -157,6 +163,18 @@ uv run python scripts/run.py train_ohab --daemon \
 ```
 
 这个实验档只恢复 `NN_TORCH`，继续排除 `FASTAI/RF/XT`，并关闭 bagging，适合做单变量对比；未验证出显著收益前，不建议把它升级为正式默认档。
+
+**如果想验证业务指标导向的训练口径**：
+
+```bash
+uv run python scripts/run.py train_ohab --daemon \
+    --data-path ./data/202602~03.tsv \
+    --training-profile server_16g_compare_balanced \
+    --train-end 2026-03-15 \
+    --valid-end 2026-03-20
+```
+
+这个档位只把训练阶段的 `eval_metric` 改为 `balanced_accuracy`，适合和默认档 `server_16g_compare` 做受控对比。
 
 **如果在更大机器上追求更高精度**：
 

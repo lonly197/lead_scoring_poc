@@ -203,6 +203,7 @@ def load_train_ohab_script(
         "training_profile": "server_16g_compare",
         "preset": "good_quality",
         "time_limit": 60,
+        "eval_metric": "log_loss",
         "num_bag_folds": 3,
         "label_mode": "hab",
         "enable_model_comparison": True,

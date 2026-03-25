@@ -104,6 +104,160 @@ ROLE_DISPLAY = {
 }
 
 
+def _safe_float(value: object) -> float:
+    try:
+        if pd.isna(value):
+            return 0.0
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _is_strict_hab_monotonic(bucket_summary_df: pd.DataFrame, metric_column: str) -> bool | None:
+    if bucket_summary_df.empty or metric_column not in bucket_summary_df.columns:
+        return None
+
+    ordered_df = bucket_summary_df.set_index("bucket")
+    if not {"H", "A", "B"}.issubset(set(ordered_df.index)):
+        return None
+
+    h_value = _safe_float(ordered_df.loc["H", metric_column])
+    a_value = _safe_float(ordered_df.loc["A", metric_column])
+    b_value = _safe_float(ordered_df.loc["B", metric_column])
+    return h_value > a_value > b_value
+
+
+def build_client_layering_summary(bucket_summary_df: pd.DataFrame) -> dict:
+    arrive_monotonic = _is_strict_hab_monotonic(bucket_summary_df, "到店标签_14天_rate")
+    drive_monotonic = _is_strict_hab_monotonic(bucket_summary_df, "试驾标签_14天_rate")
+
+    if arrive_monotonic is True and drive_monotonic is True:
+        client_message = "已形成清晰分层效果"
+    elif arrive_monotonic is True or drive_monotonic is True:
+        client_message = "已形成初步分层效果，H/A 边界仍需二期优化"
+    else:
+        client_message = "POC 已验证建模与 SOP 联动可行，分层边界仍需结合更多行为特征继续校准"
+
+    return {
+        "arrive_monotonic": arrive_monotonic,
+        "drive_monotonic": drive_monotonic,
+        "client_message": client_message,
+    }
+
+
+def compute_business_kpis(bucket_input_df: pd.DataFrame, bucket_summary_df: pd.DataFrame) -> dict:
+    overall_arrive_rate = (
+        _safe_float(pd.to_numeric(bucket_input_df["到店标签_14天"], errors="coerce").fillna(0).mean())
+        if "到店标签_14天" in bucket_input_df.columns and len(bucket_input_df) > 0
+        else 0.0
+    )
+    overall_drive_rate = (
+        _safe_float(pd.to_numeric(bucket_input_df["试驾标签_14天"], errors="coerce").fillna(0).mean())
+        if "试驾标签_14天" in bucket_input_df.columns and len(bucket_input_df) > 0
+        else 0.0
+    )
+
+    ordered_df = (
+        bucket_summary_df.set_index("bucket")
+        if not bucket_summary_df.empty and "bucket" in bucket_summary_df.columns
+        else pd.DataFrame()
+    )
+
+    def bucket_rate(bucket: str, metric: str) -> float:
+        if ordered_df.empty or bucket not in ordered_df.index or metric not in ordered_df.columns:
+            return 0.0
+        return _safe_float(ordered_df.loc[bucket, metric])
+
+    h_arrive_rate = bucket_rate("H", "到店标签_14天_rate")
+    a_arrive_rate = bucket_rate("A", "到店标签_14天_rate")
+    b_arrive_rate = bucket_rate("B", "到店标签_14天_rate")
+    h_drive_rate = bucket_rate("H", "试驾标签_14天_rate")
+    a_drive_rate = bucket_rate("A", "试驾标签_14天_rate")
+    b_drive_rate = bucket_rate("B", "试驾标签_14天_rate")
+    b_bucket_share = bucket_rate("B", "sample_ratio")
+
+    ha_arrive_capture = 0.0
+    if "到店标签_14天" in bucket_input_df.columns and "预测标签" in bucket_input_df.columns:
+        arrive_positive = pd.to_numeric(bucket_input_df["到店标签_14天"], errors="coerce").fillna(0) > 0
+        if int(arrive_positive.sum()) > 0:
+            ha_arrive_capture = _safe_float(
+                bucket_input_df.loc[arrive_positive, "预测标签"].isin(["H", "A"]).mean()
+            )
+
+    ha_drive_capture = 0.0
+    if "试驾标签_14天" in bucket_input_df.columns and "预测标签" in bucket_input_df.columns:
+        drive_positive = pd.to_numeric(bucket_input_df["试驾标签_14天"], errors="coerce").fillna(0) > 0
+        if int(drive_positive.sum()) > 0:
+            ha_drive_capture = _safe_float(
+                bucket_input_df.loc[drive_positive, "预测标签"].isin(["H", "A"]).mean()
+            )
+
+    layering_summary = build_client_layering_summary(bucket_summary_df)
+    return {
+        "overall_arrive_14d_rate": overall_arrive_rate,
+        "overall_drive_14d_rate": overall_drive_rate,
+        "h_arrive_14d_rate": h_arrive_rate,
+        "a_arrive_14d_rate": a_arrive_rate,
+        "b_arrive_14d_rate": b_arrive_rate,
+        "h_drive_14d_rate": h_drive_rate,
+        "a_drive_14d_rate": a_drive_rate,
+        "b_drive_14d_rate": b_drive_rate,
+        "h_arrive_lift": (h_arrive_rate / overall_arrive_rate) if overall_arrive_rate > 0 else 0.0,
+        "h_drive_lift": (h_drive_rate / overall_drive_rate) if overall_drive_rate > 0 else 0.0,
+        "ha_arrive_capture": ha_arrive_capture,
+        "ha_drive_capture": ha_drive_capture,
+        "b_bucket_share": b_bucket_share,
+        "client_layering_message": layering_summary["client_message"],
+        "arrive_monotonic": layering_summary["arrive_monotonic"],
+        "drive_monotonic": layering_summary["drive_monotonic"],
+    }
+
+
+def select_business_recommended_row(
+    comparison_df: pd.DataFrame,
+    macro_f1_tolerance: float = 0.01,
+) -> tuple[pd.Series, dict]:
+    if comparison_df.empty:
+        raise ValueError("comparison_df 为空，无法选择业务推荐模型")
+
+    ranked_df = comparison_df.copy()
+    for metric in ["macro_f1", "balanced_accuracy", "b_recall", "h_arrive_14d_rate", "h_drive_14d_rate"]:
+        if metric not in ranked_df.columns:
+            ranked_df[metric] = 0.0
+        ranked_df[metric] = pd.to_numeric(ranked_df[metric], errors="coerce").fillna(0.0)
+
+    max_macro_f1 = _safe_float(ranked_df["macro_f1"].max())
+    candidate_threshold = max_macro_f1 - macro_f1_tolerance
+    candidate_df = ranked_df[ranked_df["macro_f1"] >= candidate_threshold].copy()
+    if candidate_df.empty:
+        candidate_df = ranked_df.copy()
+
+    candidate_df = candidate_df.sort_values(
+        ["balanced_accuracy", "b_recall", "h_arrive_14d_rate", "h_drive_14d_rate"],
+        ascending=[False, False, False, False],
+        kind="mergesort",
+    )
+    selected_row = candidate_df.iloc[0]
+
+    selection_reason = {
+        "selected_model_name": selected_row["model_name"],
+        "selected_role": selected_row["role"],
+        "candidate_model_names": candidate_df["model_name"].tolist(),
+        "criteria": {
+            "macro_f1_tolerance": macro_f1_tolerance,
+            "max_macro_f1": max_macro_f1,
+            "candidate_threshold": candidate_threshold,
+            "tie_break_order": [
+                "balanced_accuracy",
+                "b_recall",
+                "h_arrive_14d_rate",
+                "h_drive_14d_rate",
+            ],
+        },
+    }
+    return selected_row, selection_reason
+
+
 def run_model_predictions(
     predictor,
     data: pd.DataFrame,
@@ -556,6 +710,24 @@ def main():
             bucket_summary_df = pd.DataFrame()
             monotonicity_result = {"passed": False, "metric": None, "message": "未启用 HAB 桶验证"}
             lead_actions_df = pd.DataFrame()
+            business_kpis = {
+                "overall_arrive_14d_rate": 0.0,
+                "overall_drive_14d_rate": 0.0,
+                "h_arrive_14d_rate": 0.0,
+                "a_arrive_14d_rate": 0.0,
+                "b_arrive_14d_rate": 0.0,
+                "h_drive_14d_rate": 0.0,
+                "a_drive_14d_rate": 0.0,
+                "b_drive_14d_rate": 0.0,
+                "h_arrive_lift": 0.0,
+                "h_drive_lift": 0.0,
+                "ha_arrive_capture": 0.0,
+                "ha_drive_capture": 0.0,
+                "b_bucket_share": 0.0,
+                "client_layering_message": "POC 已验证建模与 SOP 联动可行，分层边界仍需结合更多行为特征继续校准",
+                "arrive_monotonic": None,
+                "drive_monotonic": None,
+            }
             if label_mode == "hab":
                 bucket_input_df = pd.DataFrame({
                     "预测标签": y_pred.values if hasattr(y_pred, "values") else y_pred,
@@ -566,6 +738,7 @@ def main():
                         bucket_input_df[metric_column] = business_metric_frame.loc[df_processed.index, metric_column].values
                 bucket_summary_df = compute_hab_bucket_summary(bucket_input_df, label_column="预测标签")
                 monotonicity_result = check_hab_monotonicity(bucket_summary_df)
+                business_kpis = compute_business_kpis(bucket_input_df, bucket_summary_df)
 
                 lead_action_rows = []
                 for idx, row in df_processed.reset_index(drop=True).iterrows():
@@ -604,13 +777,8 @@ def main():
                 "b_recall": float(classification_dict.get("B", {}).get("recall", 0.0)),
                 "monotonicity_passed": bool(monotonicity_result.get("passed", False)),
                 "monotonicity_metric": monotonicity_result.get("metric"),
+                **business_kpis,
             }
-            if not bucket_summary_df.empty:
-                for bucket in ["H", "A", "B"]:
-                    bucket_slice = bucket_summary_df[bucket_summary_df["bucket"] == bucket]
-                    if not bucket_slice.empty:
-                        comparison_row[f"{bucket.lower()}_arrive_14d_rate"] = float(bucket_slice.iloc[0].get("到店标签_14天_rate", 0.0))
-                        comparison_row[f"{bucket.lower()}_drive_14d_rate"] = float(bucket_slice.iloc[0].get("试驾标签_14天_rate", 0.0))
             comparison_rows.append(comparison_row)
             per_model_outputs[role] = {
                 "model_name": model_name,
@@ -622,6 +790,7 @@ def main():
                 "bucket_summary_df": bucket_summary_df,
                 "monotonicity_result": monotonicity_result,
                 "lead_actions_df": lead_actions_df,
+                "business_kpis": business_kpis,
                 "report": report,
                 "cm": cm,
             }
@@ -642,8 +811,11 @@ def main():
             comparison_df.to_csv(output_dir / "model_comparison.csv", index=False, encoding="utf-8-sig")
             dump_json(output_dir / "model_comparison.json", comparison_df.to_dict(orient="records"))
 
-        primary_role = "best" if "best" in per_model_outputs else next(iter(per_model_outputs))
+        primary_row, selection_reason = select_business_recommended_row(comparison_df)
+        primary_role = str(primary_row["role"])
         primary_output = per_model_outputs[primary_role]
+        technical_best_model = predictor.model_best
+        business_recommended_model = primary_output["model_name"]
 
         primary_output["results_df"].to_csv(output_dir / "predictions.csv", index=False, encoding="utf-8-sig")
         primary_output["confusion_df"].to_csv(output_dir / "confusion_matrix.csv", encoding="utf-8-sig")
@@ -662,11 +834,25 @@ def main():
                 "accuracy": comparison_df.loc[comparison_df["role"] == primary_role, "accuracy"].iloc[0],
                 "balanced_accuracy": comparison_df.loc[comparison_df["role"] == primary_role, "balanced_accuracy"].iloc[0],
                 "mcc": comparison_df.loc[comparison_df["role"] == primary_role, "mcc"].iloc[0],
+                "macro_f1": comparison_df.loc[comparison_df["role"] == primary_role, "macro_f1"].iloc[0],
+                "b_recall": comparison_df.loc[comparison_df["role"] == primary_role, "b_recall"].iloc[0],
                 "label_policy": label_policy,
                 "label_mode": label_mode,
                 "decision_policy": per_model_outputs[primary_role]["decision_policy"],
                 "split_info": split_info,
                 "top_ratios": list(top_ratios),
+                "technical_best_model": technical_best_model,
+                "business_recommended_model": business_recommended_model,
+                "report_primary_role": primary_role,
+                "selection_reason": selection_reason,
+                "primary_metrics": {
+                    "accuracy": comparison_df.loc[comparison_df["role"] == primary_role, "accuracy"].iloc[0],
+                    "balanced_accuracy": comparison_df.loc[comparison_df["role"] == primary_role, "balanced_accuracy"].iloc[0],
+                    "mcc": comparison_df.loc[comparison_df["role"] == primary_role, "mcc"].iloc[0],
+                    "macro_f1": comparison_df.loc[comparison_df["role"] == primary_role, "macro_f1"].iloc[0],
+                    "b_recall": comparison_df.loc[comparison_df["role"] == primary_role, "b_recall"].iloc[0],
+                },
+                "business_kpis": primary_output["business_kpis"],
                 "monotonicity_check": primary_output["monotonicity_result"],
                 "model_comparison": comparison_config,
                 "comparison_rows": comparison_df.to_dict(orient="records"),
@@ -680,7 +866,8 @@ def main():
             f.write(f"模型路径: {model_path}\n")
             f.write(f"数据路径: {data_path}\n")
             f.write(f"样本数量: {len(y_true)}\n")
-            f.write(f"最佳模型: {predictor.model_best}\n\n")
+            f.write(f"技术最优模型: {technical_best_model}\n")
+            f.write(f"业务推荐模型: {business_recommended_model}\n\n")
             if not comparison_df.empty and len(comparison_df) > 1:
                 f.write("模型对比\n")
                 f.write("-" * 40 + "\n")
@@ -695,6 +882,7 @@ def main():
 
             f.write("主模型评估指标\n")
             f.write("-" * 40 + "\n")
+            f.write(f"当前主输出角色: {ROLE_DISPLAY.get(primary_role, primary_role)}\n")
             f.write(f"准确率 Accuracy: {comparison_df.loc[comparison_df['role'] == primary_role, 'accuracy'].iloc[0]:.4f}\n")
             f.write(f"平衡准确率 Balanced Accuracy: {comparison_df.loc[comparison_df['role'] == primary_role, 'balanced_accuracy'].iloc[0]:.4f}\n")
             f.write(f"马修斯相关系数 MCC: {comparison_df.loc[comparison_df['role'] == primary_role, 'mcc'].iloc[0]:.4f}\n\n")
@@ -713,6 +901,7 @@ def main():
                 for line in build_bucket_summary_text(primary_output["bucket_summary_df"].to_dict(orient="records")):
                     f.write(f"- {line}\n")
                 f.write(f"\n单调性检查: {primary_output['monotonicity_result'].get('message')}\n")
+                f.write(f"客户口径分层结论: {primary_output['business_kpis'].get('client_layering_message')}\n")
 
         logger.info(f"评估报告已保存: {report_path}")
 

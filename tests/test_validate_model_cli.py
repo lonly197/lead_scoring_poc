@@ -4,6 +4,7 @@ import types
 from argparse import Namespace
 from pathlib import Path
 
+import pandas as pd
 import pytest
 
 
@@ -20,6 +21,8 @@ def load_validate_script(monkeypatch):
     pandas_module.Series = DummySeries
     pandas_module.Timestamp = lambda value: value
     pandas_module.to_datetime = lambda value, errors=None: value
+    pandas_module.to_numeric = lambda value, errors=None: value
+    pandas_module.isna = lambda value: value is None
 
     autogluon_module = types.ModuleType("autogluon")
     tabular_module = types.ModuleType("autogluon.tabular")
@@ -246,3 +249,65 @@ def test_validate_model_artifacts_accepts_complete_metadata(monkeypatch):
         },
         Path("outputs/models/ohab_model"),
     )
+
+
+def test_select_business_recommended_row_prefers_balanced_accuracy_within_macro_f1_band(monkeypatch):
+    validate_script = load_validate_script(monkeypatch)
+
+    comparison_df = pd.DataFrame(
+        [
+            {
+                "model_name": "LightGBMXT_BAG_L2_FULL",
+                "role": "baseline",
+                "macro_f1": 0.3557,
+                "balanced_accuracy": 0.4853,
+                "b_recall": 0.4996,
+                "h_arrive_14d_rate": 0.0150,
+                "h_drive_14d_rate": 0.0040,
+            },
+            {
+                "model_name": "WeightedEnsemble_L3_FULL",
+                "role": "best",
+                "macro_f1": 0.3589,
+                "balanced_accuracy": 0.3787,
+                "b_recall": 0.2945,
+                "h_arrive_14d_rate": 0.0140,
+                "h_drive_14d_rate": 0.0030,
+            },
+        ]
+    )
+
+    selected_row, selection_reason = validate_script.select_business_recommended_row(comparison_df)
+
+    assert selected_row["role"] == "baseline"
+    assert selected_row["model_name"] == "LightGBMXT_BAG_L2_FULL"
+    assert selection_reason["selected_role"] == "baseline"
+    assert selection_reason["criteria"]["macro_f1_tolerance"] == 0.01
+
+
+def test_compute_business_kpis_returns_lift_capture_and_client_message(monkeypatch):
+    validate_script = load_validate_script(monkeypatch)
+
+    bucket_input_df = pd.DataFrame(
+        [
+            {"预测标签": "H", "到店标签_14天": 1, "试驾标签_14天": 1},
+            {"预测标签": "H", "到店标签_14天": 1, "试驾标签_14天": 0},
+            {"预测标签": "A", "到店标签_14天": 0, "试驾标签_14天": 1},
+            {"预测标签": "B", "到店标签_14天": 0, "试驾标签_14天": 0},
+        ]
+    )
+    bucket_summary_df = pd.DataFrame(
+        [
+            {"bucket": "H", "sample_ratio": 0.5, "到店标签_14天_rate": 1.0, "试驾标签_14天_rate": 0.5},
+            {"bucket": "A", "sample_ratio": 0.25, "到店标签_14天_rate": 0.5, "试驾标签_14天_rate": 1.0},
+            {"bucket": "B", "sample_ratio": 0.25, "到店标签_14天_rate": 0.1, "试驾标签_14天_rate": 0.0},
+        ]
+    )
+
+    kpis = validate_script.compute_business_kpis(bucket_input_df, bucket_summary_df)
+
+    assert kpis["h_arrive_lift"] == pytest.approx(2.0)
+    assert kpis["ha_arrive_capture"] == pytest.approx(1.0)
+    assert kpis["ha_drive_capture"] == pytest.approx(1.0)
+    assert kpis["b_bucket_share"] == pytest.approx(0.25)
+    assert kpis["client_layering_message"] == "已形成初步分层效果，H/A 边界仍需二期优化"

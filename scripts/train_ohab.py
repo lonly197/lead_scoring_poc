@@ -188,6 +188,13 @@ def parse_args():
         help="训练时间限制（秒）",
     )
     parser.add_argument(
+        "--eval-metric",
+        type=str,
+        default=None,
+        choices=["log_loss", "balanced_accuracy"],
+        help="训练阶段模型选择指标（默认按训练档位决定）",
+    )
+    parser.add_argument(
         "--train-end",
         type=str,
         default=None,
@@ -272,8 +279,14 @@ def parse_args():
         "--training-profile",
         type=str,
         default=None,
-        choices=["server_16g_compare", "server_16g_fast", "server_16g_probe_nn_torch", "lab_full_quality"],
-        help="训练档位：server_16g_compare 为 16GB 服务器正式推荐档，server_16g_probe_nn_torch 仅用于 NN_TORCH 单变量实验",
+        choices=[
+            "server_16g_compare",
+            "server_16g_fast",
+            "server_16g_probe_nn_torch",
+            "server_16g_compare_balanced",
+            "lab_full_quality",
+        ],
+        help="训练档位：server_16g_compare 为 16GB 服务器正式推荐档，server_16g_compare_balanced 仅用于业务指标受控实验",
     )
     parser.add_argument(
         "--memory-limit-gb",
@@ -329,6 +342,7 @@ def main():
     top_ratios = _parse_report_topk(args.report_topk)
     preset = runtime_config["preset"]
     time_limit = runtime_config["time_limit"]
+    eval_metric = runtime_config["eval_metric"]
     num_bag_folds = runtime_config["num_bag_folds"]
     label_mode = runtime_config["label_mode"]
     enable_model_comparison = runtime_config["enable_model_comparison"]
@@ -377,6 +391,7 @@ def main():
         f"profile={runtime_config['training_profile']}, "
         f"preset={preset}, "
         f"time_limit={time_limit}, "
+        f"eval_metric={eval_metric}, "
         f"num_bag_folds={num_bag_folds}, "
         f"label_mode={label_mode}, "
         f"model_comparison={enable_model_comparison}, "
@@ -486,7 +501,7 @@ def main():
         predictor = LeadScoringPredictor(
             label=target_label,
             output_path=str(output_dir),
-            eval_metric="log_loss",
+            eval_metric=eval_metric,
             problem_type="multiclass",
             sample_weight="balance_weight",
             max_memory_usage_ratio=max_memory_ratio,
