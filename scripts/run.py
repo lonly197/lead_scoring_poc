@@ -2,7 +2,8 @@
 """
 训练任务启动脚本
 
-支持前台运行和后台运行模式。
+支持前台运行和后台运行模式。作为代理脚本，仅处理自身需要的调度参数，
+其余所有参数将透传给对应的底层任务脚本。
 """
 
 import argparse
@@ -21,7 +22,6 @@ TASK_SCRIPT_ALIASES = {
     "train_arrive_oot": "train_arrive",
     "train_ohab_oot": "train_ohab",
 }
-TEST_SIZE_SUPPORTED_TASKS = {"train_test_drive"}
 
 
 def run_background(script_path: str, args: list[str], log_dir: str = "./outputs/logs") -> int:
@@ -92,7 +92,7 @@ def run_foreground(script_path: str, args: list[str]) -> int:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="训练任务启动脚本",
+        description="训练任务启动脚本 (透传代理模式)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 示例:
@@ -125,13 +125,6 @@ def main():
   train_ohab         - OHAB 评级训练
   train_arrive_oot   - 兼容旧名称，内部转发到 train_arrive
   train_ohab_oot     - 兼容旧名称，内部转发到 train_ohab
-
-内存优化提示:
-  1. 使用 good_quality 或 medium_quality 替代 high_quality
-  2. 降低 --num-bag-folds（5→3 或 0）
-  3. 添加 --exclude-memory-heavy-models 排除 KNN/RF/XT
-  4. 使用 --num-folds-parallel 2 限制并行度
-  5. 调整 --max-memory-ratio 0.6-0.8（默认 0.8）
         """,
     )
 
@@ -146,172 +139,19 @@ def main():
         action="store_true",
         help="后台运行模式",
     )
-    parser.add_argument(
-        "--data-path",
-        type=str,
-        help="数据文件路径",
-    )
-    parser.add_argument(
-        "--target",
-        type=str,
-        help="目标变量名",
-    )
-    parser.add_argument(
-        "--preset",
-        type=str,
-        choices=["best_quality", "high_quality", "good_quality", "medium_quality"],
-        help="AutoGluon 预设",
-    )
-    parser.add_argument(
-        "--time-limit",
-        type=int,
-        help="训练时间限制（秒）",
-    )
-    parser.add_argument(
-        "--num-bag-folds",
-        type=int,
-        help="交叉验证折数（0 表示禁用）",
-    )
-    parser.add_argument(
-        "--test-size",
-        type=float,
-        help="测试集比例",
-    )
-    parser.add_argument(
-        "--output-dir",
-        type=str,
-        help="输出目录",
-    )
-    parser.add_argument(
-        "--train-end",
-        type=str,
-        help="训练集截止日期（OOT验证专用）",
-    )
-    parser.add_argument(
-        "--valid-end",
-        type=str,
-        help="验证集截止日期（OOT验证专用）",
-    )
-    parser.add_argument(
-        "--label-mode",
-        type=str,
-        choices=["hab", "ohab"],
-        help="标签模式（train_ohab 专用）",
-    )
-    parser.add_argument(
-        "--enable-model-comparison",
-        action="store_true",
-        help="启用基线模型对比（train_ohab 专用）",
-    )
-    parser.add_argument(
-        "--baseline-family",
-        type=str,
-        choices=["gbm", "cat", "xgb", "auto"],
-        help="基线模型家族（train_ohab 专用）",
-    )
-    parser.add_argument(
-        "--training-profile",
-        type=str,
-        choices=["server_16g_compare", "server_16g_fast", "lab_full_quality"],
-        help="训练档位（train_ohab 专用）",
-    )
-    parser.add_argument(
-        "--memory-limit-gb",
-        type=float,
-        help="AutoGluon 总内存软限制（GB，train_ohab 专用）",
-    )
-    parser.add_argument(
-        "--fit-strategy",
-        type=str,
-        choices=["sequential", "parallel"],
-        help="模型级训练策略（train_ohab 专用）",
-    )
-    parser.add_argument(
-        "--excluded-model-types",
-        type=str,
-        help="排除模型类型，逗号分隔（train_ohab 专用）",
-    )
-    # 内存控制参数
-    parser.add_argument(
-        "--max-memory-ratio",
-        type=float,
-        default=None,
-        help="最大内存使用比例（train_ohab 专用）",
-    )
-    parser.add_argument(
-        "--exclude-memory-heavy-models",
-        action="store_true",
-        help="排除内存密集型模型（KNN, RF, XT）以降低内存使用",
-    )
-    parser.add_argument(
-        "--num-folds-parallel",
-        type=int,
-        default=None,
-        help="并行训练的 fold 数量（默认自动，低内存机器建议 2-3）",
-    )
 
-    args = parser.parse_args()
+    # 核心：只解析认识的参数，将其余所有参数放入 pass_args 列表透传给底层脚本
+    args, pass_args = parser.parse_known_args()
 
     resolved_task = TASK_SCRIPT_ALIASES.get(args.task, args.task)
     if resolved_task != args.task:
         print(f"提示: 任务 {args.task} 已统一到 {resolved_task}，自动转发。")
-
-    if args.test_size is not None:
-        if resolved_task not in TEST_SIZE_SUPPORTED_TASKS:
-            parser.error(
-                "--test-size 仅适用于 train_test_drive；"
-                "train_arrive 和 train_ohab 使用智能/OOT 切分，不支持该参数"
-            )
-        if not 0 < args.test_size < 1:
-            parser.error("--test-size 必须在 0 和 1 之间")
 
     # 确定脚本路径
     script_path = Path(__file__).parent / f"{resolved_task}.py"
     if not script_path.exists():
         print(f"错误: 脚本不存在: {script_path}")
         sys.exit(1)
-
-    # 构建参数
-    pass_args = []
-    if args.data_path:
-        pass_args.extend(["--data-path", args.data_path])
-    if args.target:
-        pass_args.extend(["--target", args.target])
-    if args.preset:
-        pass_args.extend(["--preset", args.preset])
-    if args.time_limit:
-        pass_args.extend(["--time-limit", str(args.time_limit)])
-    if args.num_bag_folds is not None:
-        pass_args.extend(["--num-bag-folds", str(args.num_bag_folds)])
-    if args.test_size is not None and resolved_task in TEST_SIZE_SUPPORTED_TASKS:
-        pass_args.extend(["--test-size", str(args.test_size)])
-    if args.output_dir:
-        pass_args.extend(["--output-dir", args.output_dir])
-    if args.train_end:
-        pass_args.extend(["--train-end", args.train_end])
-    if args.valid_end:
-        pass_args.extend(["--valid-end", args.valid_end])
-    if args.label_mode:
-        pass_args.extend(["--label-mode", args.label_mode])
-    if args.enable_model_comparison:
-        pass_args.append("--enable-model-comparison")
-    if args.baseline_family:
-        pass_args.extend(["--baseline-family", args.baseline_family])
-    if args.training_profile:
-        pass_args.extend(["--training-profile", args.training_profile])
-    if args.memory_limit_gb is not None:
-        pass_args.extend(["--memory-limit-gb", str(float(args.memory_limit_gb))])
-    if args.fit_strategy:
-        pass_args.extend(["--fit-strategy", args.fit_strategy])
-    if args.excluded_model_types:
-        pass_args.extend(["--excluded-model-types", args.excluded_model_types])
-    # 内存控制参数
-    if args.max_memory_ratio:
-        pass_args.extend(["--max-memory-ratio", str(args.max_memory_ratio)])
-    if args.exclude_memory_heavy_models:
-        pass_args.append("--exclude-memory-heavy-models")
-    if args.num_folds_parallel is not None:
-        pass_args.extend(["--num-folds-parallel", str(args.num_folds_parallel)])
 
     # 运行
     if args.daemon:

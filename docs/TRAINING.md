@@ -1,6 +1,17 @@
-# 训练脚本说明
+# 训练脚本说明文档 (Auto-Adapt Edition)
 
 本文档详细介绍销售线索智能评级 POC 项目的训练脚本及其使用方法。
+
+---
+
+## 🚀 统一入口：run.py 透传机制
+
+为了简化操作，项目提供了统一的任务调度入口 `scripts/run.py`。
+
+### 核心特性
+- **全参数透传**：`run.py` 仅解析调度相关的核心参数（如 `task` 和 `--daemon`），其他所有传入的参数（如 `--preset`, `--data-path`, `--o-merge-threshold` 等）都会**原封不动地转发**给底层的具体任务脚本。
+- **自动解耦**：当子任务脚本新增功能或参数时，无需修改 `run.py` 即可直接通过统一入口调用。
+- **后台守护**：使用 `--daemon` 参数可将任务转入后台运行，并通过 `monitor.py` 跟踪进度。
 
 ---
 
@@ -30,13 +41,13 @@
 
 ---
 
-## 命令行参数
+## 命令行参数调用示例
 
-所有训练脚本支持相似的参数：
+推荐通过 `run.py` 统一入口进行调用，支持参数透传：
 
 ```bash
-# 统一自适应脚本参数
-uv run python scripts/train_arrive.py \
+# 到店预测训练典型调用
+uv run python scripts/run.py train_arrive --daemon \
     --data-path ./data/202602_03.csv \      # 数据文件路径
     --target 到店标签_14天 \               # 目标变量
     --preset high_quality \                # AutoGluon 预设
@@ -44,71 +55,18 @@ uv run python scripts/train_arrive.py \
     --num-bag-folds 5                      # 交叉验证折数
     --output-dir ./outputs/models/arrive_model
 
-# 手动指定 OOT 日期（可选）
-uv run python scripts/train_arrive.py \
+# OHAB 评级任务透传 O 级合并参数
+uv run python scripts/run.py train_ohab --daemon \
     --data-path ./data/202603.tsv \
-    --train-end 2026-03-11 \               # 训练集截止日期
-    --valid-end 2026-03-16 
+    --o-merge-threshold 60 \
+    --report-topk 10,20,30
 ```
-
-### 数据路径指定
-
-支持三种方式指定数据文件：
-
-```bash
-# 方式 1：使用默认路径（.env 中的 DATA_PATH）
-uv run python scripts/train_arrive.py
-
-# 方式 2：命令行指定数据文件（推荐）
-uv run python scripts/train_arrive.py --data-path /path/to/data.csv
-
-# 方式 3：同时指定数据和目标变量
-uv run python scripts/train_arrive.py \
-    --data-path ./data/custom_data.csv \
-    --target 到店标签_30天
-```
-
-**参数优先级**：命令行参数 > `.env` 环境变量 > `config/config.py` 默认值
-
-### 预设选项
-
-| 预设 | 磁盘需求 | 训练时间 | 精度 | 适用场景 |
-|------|----------|----------|------|----------|
-| `medium_quality` | ~1G | ~15分钟 | 中等 | 快速验证、磁盘紧张 |
-| `good_quality` | ~2G | ~30分钟 | 良好 | 平衡方案 |
-| `high_quality` | ~4G | ~1小时 | 高 | 更大机器上的高质量训练 |
-| `best_quality` | ~8G | ~4小时 | 最高 | 最终优化 |
-
-### --time-limit 参数详解
-
-`--time-limit` 是 AutoGluon 的核心参数，控制模型训练的总时间（秒）。
-
-**工作原理**：
-
-AutoGluon 是"时间驱动"的 AutoML 框架，在时间限制内自动尝试多种模型（XGBoost、LightGBM、CatBoost、神经网络等），时间到后返回最佳模型。
-
-**时间与预设匹配**：
-
-| time-limit | 推荐预设 | 适用场景 |
-|------------|----------|----------|
-| 300 (5分钟) | `medium_quality` | 快速验证、调试流程 |
-| 1800 (30分钟) | `good_quality` | 初步评估模型效果 |
-| 3600 (1小时) | `high_quality` | 更大机器上的高质量训练 |
-| 7200+ (2小时+) | `best_quality` | 追求极致性能 |
-
-**重要**：时间应与预设匹配。过短时间配合高质量预设会导致模型训练不充分；过长时间配合低质量预设则浪费资源。
 
 ---
 
 ## 16GB 服务器推荐档
 
-当前 `202602~03.tsv` 规模接近 48 万行。对 16GB 内存服务器，不建议直接使用 `high_quality + 5 folds`，否则容易出现：
-
-- Ray 同时启动多折训练，占满内存
-- `RF/XT` 等高内存模型被频繁跳过
-- 训练时间长，但有效模型组合不稳定
-
-推荐直接使用 `server_16g_compare`：
+当前 `202602~03.tsv` 规模接近 48 万行。对 16GB 内存服务器，推荐使用 `server_16g_compare` 档位。
 
 ```bash
 uv run python scripts/run.py train_ohab --daemon \
@@ -118,235 +76,35 @@ uv run python scripts/run.py train_ohab --daemon \
     --valid-end 2026-03-20
 ```
 
-该档位等价于：
+### 资源自适应控制
 
-- `preset=good_quality`
-- `num_bag_folds=3`
-- `label_mode=hab`
-- `fit_strategy=sequential`
-- `excluded_model_types=RF,XT,KNN,FASTAI,NN_TORCH`
-- `enable_model_comparison=true`
-- `baseline_family=gbm`
+内存控制参数现在支持**所有**训练任务（train_arrive, train_ohab, train_test_drive），帮助在资源受限的环境下稳定运行：
 
-其中资源相关参数已改为自动探测：
-
-- 启动时先探测当前 `cpu_count`
-- 启动时先探测当前 `available_memory_gb`
-- 在未显式指定时，自动推导更保守的 `memory_limit_gb`
-- 在未显式指定时，自动推导 `num_folds_parallel`
-
-例如在一台 16GB 服务器上，如果当前只有约 `11GB` 可用内存，脚本通常会把：
-
-- `memory_limit_gb` 自动收敛到约 `9GB`
-- `num_folds_parallel` 自动收敛到 `1`
-
-这样做的目的，是避免把 `.env` 或训练档位里的理论上限直接硬套到当前机器状态上。
-
-如果你需要固定资源参数，命令行仍然可以覆盖自动结果：
-
-```bash
-uv run python scripts/run.py train_ohab --daemon \
-    --data-path ./data/202602~03.tsv \
-    --training-profile server_16g_compare \
-    --memory-limit-gb 10 \
-    --num-folds-parallel 1 \
-    --train-end 2026-03-15 \
-    --valid-end 2026-03-20
-```
-
-如果需要更快地做流程验证，可使用：
-
-```bash
-uv run python scripts/run.py train_ohab --daemon \
-    --data-path ./data/202602~03.tsv \
-    --training-profile server_16g_fast \
-    --train-end 2026-03-15 \
-    --valid-end 2026-03-20
-```
-
-如果在更大机器上做高质量重训，再使用：
-
-```bash
-uv run python scripts/run.py train_ohab --daemon \
-    --data-path ./data/202602~03.tsv \
-    --training-profile lab_full_quality \
-    --train-end 2026-03-15 \
-    --valid-end 2026-03-20
-```
+- `--max-memory-ratio`: 最大内存使用比例（默认 0.8，建议 0.6-0.8）
+- `--exclude-memory-heavy-models`: 排除内存密集型模型（KNN, RF, XT）
+- `--num-folds-parallel`: 限制并行训练的 fold 数量
 
 ---
 
-## 当前数据集分析
+## 模型验证 (validate_model)
 
-### 数据概况（202603.tsv）
+验证模型在测试集上的表现。
 
-| 项目 | 数值 |
-|------|------|
-| 总数据量 | 286,823 行 |
-| 原始列数 | 46 列 |
-| 派生列数 | 10 列（目标变量 + 时间特征） |
-| 时间范围 | 2026-03-01 ~ 2026-03-23 |
-
-### OHAB 评级分布
-
-```
-线索评级结果 分布:
-H      112,012 (39%)  - 高意向
-A       87,175 (30%)  - 中等意向
-B       10,805 (4%)   - 低意向
-O            12 (0.006%)  - 已成交
-Unknown    76,819 (27%)  - 未评级
-```
-
-### ⚠️ 数据质量问题：O 级样本不足
-
-**问题**：O 级（已订车/已成交）仅有 12 个样本，极度不平衡。
-
-**影响**：
-- 12 个样本无法学习有效模式
-- 多分类模型可能忽略 O 级或过拟合
-- 评估指标不可靠
-
-**建议方案**：
-
-| 方案 | 适用场景 | 实现方式 |
-|------|----------|----------|
-| **降级为三分类** | O 级无预测价值 | 过滤 O 级，预测 H/A/B |
-| **合并为二分类** | 只需区分高/低意向 | H/A = 高意向，B/O = 低意向 |
-| **等待数据沉淀** | O 级有业务价值 | 收集更多成交数据后再训练 |
-
-### 推荐训练配置
-
-基于当前数据集（286,823 行，过滤后 ~210,000 行）：
-
+### 基础验证
 ```bash
-# 推荐配置（平衡时间和质量）
-uv run python scripts/train_ohab.py \
-    --data-path ./data/202603.tsv \
-    --preset good_quality \
-    --time-limit 1800
-
-# 快速验证配置（调试用）
-uv run python scripts/train_ohab.py \
-    --data-path ./data/202603.tsv \
-    --preset medium_quality \
-    --time-limit 600
-```
-
-### OHAB 验证建议
-
-```bash
-# 训练完成后，显式使用统一输出目录验证
 uv run python scripts/validate_model.py \
     --model-path ./outputs/models/ohab_model \
     --data-path ./data/202603.tsv
 ```
 
-### HAB 基线模型对比建议
-
-如果需要在 POC 汇报中同时展示“基线模型 vs 最优模型”，推荐在训练时启用：
-
-```bash
-uv run python scripts/train_ohab.py \
-    --data-path ./data/202602~03.tsv \
-    --training-profile server_16g_compare \
-    --train-end 2026-03-15 \
-    --valid-end 2026-03-20
-```
-
-启用后会额外保留：
-
-- `baseline_model_name`
-- `best_model_name`
-- 两个模型各自的阈值策略
-- `model_comparison_config.json`
-
-验证阶段会同步输出：
-
-- `model_comparison.csv`
-- `predictions_baseline.csv`
-- `predictions_best.csv`
-
-推荐将 `model_comparison.csv` 作为客户汇报中的“模型对比页”输入。
-
-验证脚本会优先读取训练时保存的 `feature_metadata.json`：
-- `mode=oot` / `mode=oot_manual` 时，只评估 `时间 >= valid_end` 的 OOT 测试段
-- `mode=random` 时，根据测试集 ID 或索引进行物理隔离
-- 数据中存在 `is_final_ordered` 时，会额外输出终态下定转化率分析
-
----
-
-## 评估指标
-
-### 核心指标
-
-| 指标 | 说明 | 计算方式 |
-|------|------|----------|
-| ROC-AUC | 整体区分能力 | 模型区分正负类的能力 |
-| Top-K 命中率 | Top-K 中的实际到店比例 | `命中数 / K` |
-| Lift | 模型比随机好多少 | `命中率 / 基线转化率` |
-
-### Lift 解读
-
-```
-Lift = 2.0  →  Top-K 的命中率是随机的 2 倍
-Lift = 1.0  →  与随机相同，模型无效
-Lift > 1.5  →  模型有实际业务价值
-```
-
-### 示例报告
-
-```json
-{
-  "topk_metrics": {
-    "top_100": {"hit_rate": 0.45, "lift": 3.2},
-    "top_500": {"hit_rate": 0.38, "lift": 2.7},
-    "top_1000": {"hit_rate": 0.32, "lift": 2.3}
-  }
-}
-```
-
----
-
-## 磁盘空间管理
-
-### 训练前检查
-
-训练脚本会在启动时自动检查磁盘空间，并在空间不足时给出警告：
-
-```
-磁盘状态: 剩余 1.2G / 需要 4.0G (high_quality)
-WARNING: 磁盘空间不足！建议使用 medium_quality preset
-```
-
-### 磁盘空间建议
-
-| 预设 | 最低磁盘空间 | 推荐磁盘空间 |
-|------|--------------|--------------|
-| `medium_quality` | 2G | 3G+ |
-| `good_quality` | 3G | 5G+ |
-| `high_quality` | 5G | 8G+ |
-| `best_quality` | 10G | 15G+ |
-
-### 训练后自动清理
-
-训练完成后会自动清理非最佳模型，释放磁盘空间：
-
-```
-模型目录大小: 1250.5 MB
-清理完成: 释放 520.3 MB
-```
-
-### 手动清理命令
+### 进阶：严格 OOT 验证（防泄露）
+在评估 OOT 效果时，必须开启 `--oot-test` 标志，以确保仅评估测试集（时间 >= valid_end）范围内的数据：
 
 ```bash
-# 清理失败的模型目录
-rm -rf outputs/models/ohab_model/
-
-# 清理 AutoGluon 缓存
-rm -rf ~/.cache/autogluon/
-rm -rf /tmp/autogluon*
-
-# 清理 Ray 会话缓存
-rm -rf /tmp/ray/
+uv run python scripts/validate_model.py \
+    --model-path ./outputs/models/ohab_model \
+    --data-path ./data/202603.tsv \
+    --oot-test \
+    --train-end 2026-03-11 \
+    --valid-end 2026-03-16
 ```
