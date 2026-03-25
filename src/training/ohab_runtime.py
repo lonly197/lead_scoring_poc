@@ -20,11 +20,11 @@ TRAINING_PROFILES: dict[str, dict[str, Any]] = {
         "label_mode": "hab",
         "enable_model_comparison": True,
         "baseline_family": "gbm",
-        "memory_limit_gb": 12.0,
-        "fit_strategy": "sequential",
+        "memory_limit_gb": None,  # 自动根据可用内存计算
+        "fit_strategy": "parallel",  # 启用模型级并行
         "excluded_model_types": DEFAULT_MEMORY_HEAVY_MODELS,
-        "num_folds_parallel": 1,
-        "max_memory_ratio": None,
+        "num_folds_parallel": None,  # 自动计算
+        "max_memory_ratio": 0.7,  # 单模型内存上限
     },
     "server_16g_fast": {
         "preset": "medium_quality",
@@ -33,11 +33,11 @@ TRAINING_PROFILES: dict[str, dict[str, Any]] = {
         "label_mode": "hab",
         "enable_model_comparison": False,
         "baseline_family": "gbm",
-        "memory_limit_gb": 10.0,
-        "fit_strategy": "sequential",
+        "memory_limit_gb": None,
+        "fit_strategy": "parallel",
         "excluded_model_types": DEFAULT_MEMORY_HEAVY_MODELS,
-        "num_folds_parallel": 1,
-        "max_memory_ratio": None,
+        "num_folds_parallel": None,
+        "max_memory_ratio": 0.7,
     },
     "lab_full_quality": {
         "preset": "high_quality",
@@ -47,7 +47,7 @@ TRAINING_PROFILES: dict[str, dict[str, Any]] = {
         "enable_model_comparison": True,
         "baseline_family": "gbm",
         "memory_limit_gb": None,
-        "fit_strategy": "sequential",
+        "fit_strategy": "parallel",
         "excluded_model_types": None,
         "num_folds_parallel": None,
         "max_memory_ratio": None,
@@ -139,11 +139,22 @@ def _derive_memory_limit_gb(
     profile_limit_gb: float | None,
     available_memory_gb: float | None,
 ) -> float | None:
+    """
+    推导 AutoGluon 内存软限制。
+
+    策略：
+    - 预留 2-3GB 给系统和其他进程
+    - 使用可用内存的 70% 作为软限制
+    - 最小 4GB
+    """
     if available_memory_gb is None:
         return profile_limit_gb
 
-    reserve_gb = 2.0 if available_memory_gb >= 8 else 1.0
-    derived_limit_gb = max(4.0, _round_down_half(available_memory_gb - reserve_gb))
+    # 预留内存：小机器预留 2GB，大机器预留 3GB
+    reserve_gb = 2.5 if available_memory_gb >= 12 else 2.0
+
+    # 使用可用内存的 70%，但确保至少 4GB
+    derived_limit_gb = max(4.0, _round_down_half((available_memory_gb - reserve_gb) * 0.7))
 
     if profile_limit_gb is None:
         return derived_limit_gb
@@ -155,15 +166,28 @@ def _derive_num_folds_parallel(
     cpu_count: int,
     available_memory_gb: float | None,
 ) -> int | None:
+    """
+    根据系统资源推导合理的并行 fold 数量。
+
+    策略：
+    - CPU 核心数 >= 4 且可用内存 >= 6GB：启用 2 并行
+    - CPU 核心数 >= 8 且可用内存 >= 10GB：启用 3 并行
+    - 其他情况：保持串行（1）
+    """
     if requested_num_bag_folds <= 1:
         return 1
     if cpu_count <= 2:
         return 1
     if available_memory_gb is None:
         return 1
-    if available_memory_gb < 18 or cpu_count < 8:
+
+    # 更激进的并行策略
+    if cpu_count >= 8 and available_memory_gb >= 10:
+        return min(3, requested_num_bag_folds)
+    elif cpu_count >= 4 and available_memory_gb >= 6:
+        return min(2, requested_num_bag_folds)
+    else:
         return 1
-    return min(2, requested_num_bag_folds)
 
 
 def resolve_training_config(args) -> dict[str, Any]:
