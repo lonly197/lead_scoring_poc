@@ -8,16 +8,29 @@
 
 ```bash
 # 数据配置
-DATA_PATH=./data/20260308-v2.csv
+DATA_PATH=./data/202602~03.tsv
 TRAIN_TEST_SPLIT_RATIO=0.2
 
 # 模型配置
-MODEL_PRESET=high_quality
+MODEL_PRESET=good_quality
 TIME_LIMIT=3600
 RANDOM_SEED=42
 
 # 目标变量（中文）
 TARGET_LABEL=到店标签_14天
+
+# HAB/OHAB 训练推荐配置（16GB 服务器）
+OHAB_TRAINING_PROFILE=server_16g_compare
+OHAB_MODEL_PRESET=good_quality
+OHAB_TIME_LIMIT=5400
+OHAB_NUM_BAG_FOLDS=3
+OHAB_LABEL_MODE=hab
+OHAB_ENABLE_MODEL_COMPARISON=true
+OHAB_BASELINE_FAMILY=gbm
+OHAB_MEMORY_LIMIT_GB=12
+OHAB_FIT_STRATEGY=sequential
+OHAB_EXCLUDED_MODEL_TYPES=RF,XT,KNN,FASTAI,NN_TORCH
+OHAB_NUM_FOLDS_PARALLEL=1
 
 # 输出配置
 OUTPUT_DIR=./outputs
@@ -68,3 +81,29 @@ OUTPUT_DIR=./outputs
 ```
 命令行参数 > .env 环境变量 > config/config.py 默认值
 ```
+
+### HAB/OHAB 训练专用配置
+
+`train_ohab.py` 会优先读取 `OHAB_*` 环境变量。推荐把 16GB 服务器默认档直接写入 `.env`，避免团队继续误用高资源配置。
+
+| 环境变量 | 说明 | 推荐值 |
+|----------|------|--------|
+| `OHAB_TRAINING_PROFILE` | 训练档位 | `server_16g_compare` |
+| `OHAB_MODEL_PRESET` | AutoGluon 预设 | `good_quality` |
+| `OHAB_TIME_LIMIT` | 总训练时长（秒） | `5400` |
+| `OHAB_NUM_BAG_FOLDS` | Bagging 折数 | `3` |
+| `OHAB_LABEL_MODE` | 评级模式 | `hab` |
+| `OHAB_ENABLE_MODEL_COMPARISON` | 是否保留基线模型对比 | `true` |
+| `OHAB_BASELINE_FAMILY` | 基线模型家族 | `gbm` |
+| `OHAB_MEMORY_LIMIT_GB` | 训练内存上限 | `12` |
+| `OHAB_FIT_STRATEGY` | 模型训练策略 | `sequential` |
+| `OHAB_EXCLUDED_MODEL_TYPES` | 排除的高内存模型 | `RF,XT,KNN,FASTAI,NN_TORCH` |
+| `OHAB_NUM_FOLDS_PARALLEL` | 并行折数 | `1` |
+
+### 内置训练档位
+
+| 档位 | 适用场景 | 关键配置 |
+|------|----------|----------|
+| `server_16g_compare` | 16GB 服务器正式推荐档 | `good_quality + 3 folds + baseline 对比` |
+| `server_16g_fast` | 快速验证流程 | `medium_quality + 0 folds` |
+| `lab_full_quality` | 更大机器的高质量训练 | `high_quality + 5 folds` |

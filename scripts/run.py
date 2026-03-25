@@ -209,12 +209,34 @@ def main():
         choices=["gbm", "cat", "xgb", "auto"],
         help="基线模型家族（train_ohab 专用）",
     )
+    parser.add_argument(
+        "--training-profile",
+        type=str,
+        choices=["server_16g_compare", "server_16g_fast", "lab_full_quality"],
+        help="训练档位（train_ohab 专用）",
+    )
+    parser.add_argument(
+        "--memory-limit-gb",
+        type=float,
+        help="AutoGluon 总内存软限制（GB，train_ohab 专用）",
+    )
+    parser.add_argument(
+        "--fit-strategy",
+        type=str,
+        choices=["sequential", "parallel"],
+        help="模型级训练策略（train_ohab 专用）",
+    )
+    parser.add_argument(
+        "--excluded-model-types",
+        type=str,
+        help="排除模型类型，逗号分隔（train_ohab 专用）",
+    )
     # 内存控制参数
     parser.add_argument(
         "--max-memory-ratio",
         type=float,
-        default=0.8,
-        help="最大内存使用比例（默认 0.8，低内存机器建议 0.6-0.8）",
+        default=None,
+        help="最大内存使用比例（train_ohab 专用）",
     )
     parser.add_argument(
         "--exclude-memory-heavy-models",
@@ -275,6 +297,14 @@ def main():
         pass_args.append("--enable-model-comparison")
     if args.baseline_family:
         pass_args.extend(["--baseline-family", args.baseline_family])
+    if args.training_profile:
+        pass_args.extend(["--training-profile", args.training_profile])
+    if args.memory_limit_gb is not None:
+        pass_args.extend(["--memory-limit-gb", str(float(args.memory_limit_gb))])
+    if args.fit_strategy:
+        pass_args.extend(["--fit-strategy", args.fit_strategy])
+    if args.excluded_model_types:
+        pass_args.extend(["--excluded-model-types", args.excluded_model_types])
     # 内存控制参数
     if args.max_memory_ratio:
         pass_args.extend(["--max-memory-ratio", str(args.max_memory_ratio)])

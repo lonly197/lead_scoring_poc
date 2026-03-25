@@ -23,14 +23,10 @@
 # 安装依赖
 uv sync && cp .env.example .env
 
-# HAB 评级训练（带 baseline vs best 对比）
+# HAB 评级训练（16GB 服务器推荐档，带基线 vs 最优模型对比）
 uv run python scripts/run.py train_ohab --daemon \
   --data-path ./data/202602~03.tsv \
-  --preset high_quality \
-  --num-bag-folds 5 \
-  --label-mode hab \
-  --enable-model-comparison \
-  --baseline-family gbm \
+  --training-profile server_16g_compare \
   --train-end 2026-03-15 \
   --valid-end 2026-03-20
 
@@ -81,7 +77,7 @@ uv run python scripts/train_arrive.py
 ## 环境要求
 
 - Python 3.9-3.12（推荐 3.11）
-- 内存：16GB+
+- 内存：16GB+（16GB 服务器建议使用 `server_16g_compare`，更大机器再用 `lab_full_quality`）
 - 磁盘：2-10G（根据 preset）
 
 ## 许可证

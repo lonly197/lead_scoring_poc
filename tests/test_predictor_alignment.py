@@ -224,3 +224,32 @@ def test_cleanup_can_keep_named_models(monkeypatch, tmp_path):
     predictor.cleanup(keep_best_only=False, keep_model_names=["FakeModel", "BaselineModel"])
 
     assert predictor._predictor.last_delete_models["models_to_keep"] == ["FakeModel", "BaselineModel"]
+
+
+def test_train_passes_memory_and_ensemble_controls_with_autogluon_shape(monkeypatch, tmp_path):
+    install_fake_autogluon(monkeypatch)
+
+    train_data = pd.DataFrame({"feat_a": [1, 2], "label": [0, 1]})
+
+    predictor = LeadScoringPredictor(
+        label="label",
+        output_path=str(tmp_path),
+        memory_limit_gb=12,
+        fit_strategy="sequential",
+        excluded_model_types=["RF", "XT"],
+        num_folds_parallel=1,
+        max_memory_usage_ratio=0.9,
+    )
+    predictor.train(
+        train_data=train_data,
+        presets="good_quality",
+        time_limit=1,
+        num_bag_folds=3,
+    )
+
+    fake_predictor = FakeTabularPredictor.last_instance
+    assert fake_predictor.fit_kwargs["memory_limit"] == 12
+    assert fake_predictor.fit_kwargs["fit_strategy"] == "sequential"
+    assert fake_predictor.fit_kwargs["excluded_model_types"] == ["RF", "XT"]
+    assert fake_predictor.fit_kwargs["ag_args_ensemble"] == {"num_folds_parallel": 1}
+    assert fake_predictor.fit_kwargs["ag_args_fit"] == {"max_memory_usage_ratio": 0.9}

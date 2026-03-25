@@ -84,14 +84,27 @@ uv run python scripts/run.py train_ohab --daemon --preset high_quality
 对 `202602~03.tsv` 这类跨月数据，建议固定手动 OOT 切分，保证每次汇报口径一致。
 
 ```bash
-# 推荐：HAB 评级训练（固定 OOT 口径 + 基线模型对比）
+# 推荐：16GB 服务器 HAB 评级训练（固定 OOT 口径 + 基线模型对比）
 uv run python scripts/run.py train_ohab --daemon \
     --data-path ./data/202602~03.tsv \
-    --preset high_quality \
-    --num-bag-folds 5 \
-    --label-mode hab \
-    --enable-model-comparison \
-    --baseline-family gbm \
+    --training-profile server_16g_compare \
+    --train-end 2026-03-15 \
+    --valid-end 2026-03-20
+```
+
+**为什么推荐 `server_16g_compare`**：
+
+- 适配 16GB 内存服务器，默认使用 `good_quality + 3 folds`
+- 自动限制折并行为 `1`，避免 Ray 同时拉起 5 折训练占满内存
+- 默认排除 `RF/XT/KNN/FASTAI/NN_TORCH` 等高内存模型
+- 保留 `gbm` 基线模型和 AutoGluon 最优模型的对比产物，适合客户汇报
+
+**如果在更大机器上追求更高精度**：
+
+```bash
+uv run python scripts/run.py train_ohab --daemon \
+    --data-path ./data/202602~03.tsv \
+    --training-profile lab_full_quality \
     --train-end 2026-03-15 \
     --valid-end 2026-03-20
 ```
@@ -158,11 +171,7 @@ git pull origin main
 # 2. 训练 HAB 模型
 uv run python scripts/run.py train_ohab --daemon \
     --data-path ./data/202602~03.tsv \
-    --preset high_quality \
-    --num-bag-folds 5 \
-    --label-mode hab \
-    --enable-model-comparison \
-    --baseline-family gbm \
+    --training-profile server_16g_compare \
     --train-end 2026-03-15 \
     --valid-end 2026-03-20
 

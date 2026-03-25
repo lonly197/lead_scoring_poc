@@ -26,8 +26,10 @@ class LeadScoringPredictor:
         problem_type: Optional[str] = None,
         sample_weight: Optional[str] = None,
         weight_evaluation: bool = False,
-        # 内存控制参数
-        max_memory_usage_ratio: float = 0.8,
+        # 资源控制参数
+        max_memory_usage_ratio: Optional[float] = None,
+        memory_limit_gb: Optional[float] = None,
+        fit_strategy: Optional[str] = None,
         excluded_model_types: Optional[List[str]] = None,
         num_folds_parallel: Optional[int] = None,
     ):
@@ -45,9 +47,11 @@ class LeadScoringPredictor:
                 - 'auto_weight': 自动权重策略
                 - str: 指定权重列名
             weight_evaluation: 是否在评估时使用样本权重
-            max_memory_usage_ratio: 最大内存使用比例（默认 0.8，低于 1.0 更安全）
+            max_memory_usage_ratio: 模型级最大内存使用比例（不推荐默认启用）
+            memory_limit_gb: AutoGluon 总内存软限制（GB）
+            fit_strategy: 模型级训练策略（sequential/parallel）
             excluded_model_types: 排除的模型类型列表（内存密集型：KNN, RF, XT）
-            num_folds_parallel: 并行训练的 fold 数量（None=自动，低内存机器建议 2-3）
+            num_folds_parallel: 并行训练的 fold 数量（None=自动，低内存机器建议 1）
         """
         self.label = label
         self.output_path = Path(output_path)
@@ -56,6 +60,8 @@ class LeadScoringPredictor:
         self.sample_weight = sample_weight
         self.weight_evaluation = weight_evaluation
         self.max_memory_usage_ratio = max_memory_usage_ratio
+        self.memory_limit_gb = memory_limit_gb
+        self.fit_strategy = fit_strategy
         self.excluded_model_types = excluded_model_types
         self.num_folds_parallel = num_folds_parallel
 
@@ -234,11 +240,19 @@ class LeadScoringPredictor:
             **kwargs,
         }
 
-        # 内存控制参数
+        # 资源控制参数
+        if self.memory_limit_gb is not None:
+            fit_kwargs["memory_limit"] = self.memory_limit_gb
+            logger.info(f"总内存软限制: {self.memory_limit_gb} GB")
+
+        if self.fit_strategy:
+            fit_kwargs["fit_strategy"] = self.fit_strategy
+            logger.info(f"模型训练策略: {self.fit_strategy}")
+
         if self.max_memory_usage_ratio is not None:
-            fit_kwargs["ag_args_fit"] = {
-                "ag.max_memory_usage_ratio": self.max_memory_usage_ratio
-            }
+            ag_args_fit = dict(fit_kwargs.get("ag_args_fit") or {})
+            ag_args_fit["max_memory_usage_ratio"] = self.max_memory_usage_ratio
+            fit_kwargs["ag_args_fit"] = ag_args_fit
             logger.info(f"内存使用比例限制: {self.max_memory_usage_ratio}")
 
         # 排除内存密集型模型
@@ -248,7 +262,9 @@ class LeadScoringPredictor:
 
         # 限制并行 fold 数量
         if self.num_folds_parallel is not None:
-            fit_kwargs["num_folds_parallel"] = self.num_folds_parallel
+            ag_args_ensemble = dict(fit_kwargs.get("ag_args_ensemble") or {})
+            ag_args_ensemble["num_folds_parallel"] = self.num_folds_parallel
+            fit_kwargs["ag_args_ensemble"] = ag_args_ensemble
             logger.info(f"并行 fold 数量限制: {self.num_folds_parallel}")
 
         for dataset_name, include_label in (

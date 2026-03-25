@@ -76,7 +76,7 @@ uv run python scripts/train_arrive.py \
 |------|----------|----------|------|----------|
 | `medium_quality` | ~1G | ~15分钟 | 中等 | 快速验证、磁盘紧张 |
 | `good_quality` | ~2G | ~30分钟 | 良好 | 平衡方案 |
-| `high_quality` | ~4G | ~1小时 | 高 | **推荐，生产使用** |
+| `high_quality` | ~4G | ~1小时 | 高 | 更大机器上的高质量训练 |
 | `best_quality` | ~8G | ~4小时 | 最高 | 最终优化 |
 
 ### --time-limit 参数详解
@@ -93,10 +93,62 @@ AutoGluon 是"时间驱动"的 AutoML 框架，在时间限制内自动尝试多
 |------------|----------|----------|
 | 300 (5分钟) | `medium_quality` | 快速验证、调试流程 |
 | 1800 (30分钟) | `good_quality` | 初步评估模型效果 |
-| 3600 (1小时) | `high_quality` | 生产级模型（默认值） |
+| 3600 (1小时) | `high_quality` | 更大机器上的高质量训练 |
 | 7200+ (2小时+) | `best_quality` | 追求极致性能 |
 
 **重要**：时间应与预设匹配。过短时间配合高质量预设会导致模型训练不充分；过长时间配合低质量预设则浪费资源。
+
+---
+
+## 16GB 服务器推荐档
+
+当前 `202602~03.tsv` 规模接近 48 万行。对 16GB 内存服务器，不建议直接使用 `high_quality + 5 folds`，否则容易出现：
+
+- Ray 同时启动多折训练，占满内存
+- `RF/XT` 等高内存模型被频繁跳过
+- 训练时间长，但有效模型组合不稳定
+
+推荐直接使用 `server_16g_compare`：
+
+```bash
+uv run python scripts/run.py train_ohab --daemon \
+    --data-path ./data/202602~03.tsv \
+    --training-profile server_16g_compare \
+    --train-end 2026-03-15 \
+    --valid-end 2026-03-20
+```
+
+该档位等价于：
+
+- `preset=good_quality`
+- `num_bag_folds=3`
+- `label_mode=hab`
+- `memory_limit_gb=12`
+- `fit_strategy=sequential`
+- `num_folds_parallel=1`
+- `excluded_model_types=RF,XT,KNN,FASTAI,NN_TORCH`
+- `enable_model_comparison=true`
+- `baseline_family=gbm`
+
+如果需要更快地做流程验证，可使用：
+
+```bash
+uv run python scripts/run.py train_ohab --daemon \
+    --data-path ./data/202602~03.tsv \
+    --training-profile server_16g_fast \
+    --train-end 2026-03-15 \
+    --valid-end 2026-03-20
+```
+
+如果在更大机器上做高质量重训，再使用：
+
+```bash
+uv run python scripts/run.py train_ohab --daemon \
+    --data-path ./data/202602~03.tsv \
+    --training-profile lab_full_quality \
+    --train-end 2026-03-15 \
+    --valid-end 2026-03-20
+```
 
 ---
 
@@ -173,10 +225,7 @@ uv run python scripts/validate_model.py \
 ```bash
 uv run python scripts/train_ohab.py \
     --data-path ./data/202602~03.tsv \
-    --preset high_quality \
-    --label-mode hab \
-    --enable-model-comparison \
-    --baseline-family gbm \
+    --training-profile server_16g_compare \
     --train-end 2026-03-15 \
     --valid-end 2026-03-20
 ```

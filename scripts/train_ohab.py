@@ -43,6 +43,7 @@ from src.evaluation.ohab_metrics import (
 )
 from src.models.predictor import LeadScoringPredictor
 from src.evaluation.business_logic import calculate_dimension_contribution, BUSINESS_DIMENSION_MAP
+from src.training.ohab_runtime import resolve_training_config
 from src.utils.visualization import plot_feature_importance, plot_dimension_contribution
 from src.utils.helpers import (
     check_disk_space,
@@ -157,14 +158,14 @@ def parse_args():
     parser.add_argument(
         "--preset",
         type=str,
-        default="high_quality",
+        default=None,
         choices=["best_quality", "high_quality", "good_quality", "medium_quality"],
         help="AutoGluon 预设",
     )
     parser.add_argument(
         "--time-limit",
         type=int,
-        default=3600,
+        default=None,
         help="训练时间限制（秒）",
     )
     parser.add_argument(
@@ -188,7 +189,7 @@ def parse_args():
     parser.add_argument(
         "--num-bag-folds",
         type=int,
-        default=5,
+        default=None,
         help="交叉验证折数（0 表示禁用）",
     )
     parser.add_argument(
@@ -218,32 +219,60 @@ def parse_args():
     parser.add_argument(
         "--label-mode",
         type=str,
-        default="hab",
+        default=None,
         choices=["hab", "ohab"],
         help="标签模式：hab=仅输出 H/A/B；ohab=保留 O/H/A/B",
     )
     parser.add_argument(
         "--enable-model-comparison",
         action="store_true",
+        default=None,
         help="保留基线子模型并输出 baseline vs best 的对比配置",
     )
     parser.add_argument(
         "--baseline-family",
         type=str,
-        default="gbm",
+        default=None,
         choices=["gbm", "cat", "xgb", "auto"],
         help="模型对比时的基线家族",
+    )
+    parser.add_argument(
+        "--training-profile",
+        type=str,
+        default=None,
+        choices=["server_16g_compare", "server_16g_fast", "lab_full_quality"],
+        help="训练档位：server_16g_compare 为 16GB 服务器推荐档",
+    )
+    parser.add_argument(
+        "--memory-limit-gb",
+        type=float,
+        default=None,
+        help="AutoGluon 总内存软限制（GB）",
+    )
+    parser.add_argument(
+        "--fit-strategy",
+        type=str,
+        default=None,
+        choices=["sequential", "parallel"],
+        help="模型级训练策略",
+    )
+    parser.add_argument(
+        "--excluded-model-types",
+        type=str,
+        default=None,
+        help="要排除的模型类型，逗号分隔，如 RF,XT,KNN,FASTAI,NN_TORCH",
     )
     # 内存控制参数
     parser.add_argument(
         "--max-memory-ratio",
         type=float,
-        default=0.8,
-        help="最大内存使用比例（默认 0.8，低内存机器建议 0.6-0.8）",
+        default=None,
+        help="模型级最大内存使用比例（高级参数，谨慎使用）",
     )
     parser.add_argument(
         "--exclude-memory-heavy-models",
         action="store_true",
+        default=None,
         help="排除内存密集型模型（KNN, RF, XT）以降低内存使用",
     )
     parser.add_argument(
@@ -259,12 +288,24 @@ def parse_args():
 def main():
     """主函数"""
     args = parse_args()
+    runtime_config = resolve_training_config(args)
 
     # 配置路径
     data_path = args.data_path or config.data.data_path
     target_label = args.target
     output_dir = Path(args.output_dir or config.output.models_dir) / "ohab_model"
     top_ratios = _parse_report_topk(args.report_topk)
+    preset = runtime_config["preset"]
+    time_limit = runtime_config["time_limit"]
+    num_bag_folds = runtime_config["num_bag_folds"]
+    label_mode = runtime_config["label_mode"]
+    enable_model_comparison = runtime_config["enable_model_comparison"]
+    baseline_family = runtime_config["baseline_family"]
+    memory_limit_gb = runtime_config["memory_limit_gb"]
+    fit_strategy = runtime_config["fit_strategy"]
+    excluded_model_types = runtime_config["excluded_model_types"]
+    num_folds_parallel = runtime_config["num_folds_parallel"]
+    max_memory_ratio = runtime_config["max_memory_ratio"]
     
     # 日志设置
     if args.log_file:
@@ -298,6 +339,24 @@ def main():
     logger.info(f"训练开始时间: {train_start_time.strftime('%Y-%m-%d %H:%M:%S%z')}")
     logger.info(f"数据路径: {data_path}")
     logger.info(f"目标变量: {target_label}")
+    logger.info(
+        "有效训练配置: "
+        f"profile={runtime_config['training_profile']}, "
+        f"preset={preset}, "
+        f"time_limit={time_limit}, "
+        f"num_bag_folds={num_bag_folds}, "
+        f"label_mode={label_mode}, "
+        f"model_comparison={enable_model_comparison}, "
+        f"baseline_family={baseline_family}, "
+        f"memory_limit_gb={memory_limit_gb}, "
+        f"fit_strategy={fit_strategy}, "
+        f"num_folds_parallel={num_folds_parallel}, "
+        f"excluded_model_types={excluded_model_types}"
+    )
+
+    required_gb = get_preset_disk_requirement(preset)
+    disk_info = check_disk_space("./", required_gb=required_gb)
+    logger.info(f"磁盘状态: 剩余 {disk_info['free_gb']}G / 需要 {required_gb}G ({preset})")
 
     # 1. 加载数据
     try:
@@ -325,7 +384,7 @@ def main():
         label_policy = build_ohab_label_policy(
             train_df,
             target_label=target_label,
-            label_mode=args.label_mode,
+            label_mode=label_mode,
             o_merge_threshold=args.o_merge_threshold,
             merge_target=args.o_merge_target,
         )
@@ -356,7 +415,7 @@ def main():
 
         feature_metadata["split_info"] = split_info
         feature_metadata["label_policy"] = label_policy
-        feature_metadata["label_mode"] = args.label_mode
+        feature_metadata["label_mode"] = label_mode
         feature_metadata["schema_contract"] = adaptation_metadata.get("schema_contract", {})
         feature_metadata["feature_names_version"] = "ohab_schema_contract_v2"
         if adaptation_metadata.get("json_feature_source"):
@@ -371,12 +430,8 @@ def main():
             json.dump(feature_metadata, f, ensure_ascii=False, indent=2)
 
         excluded_columns = get_excluded_columns(target_label)
-
-        # 内存密集型模型排除
-        excluded_model_types = None
-        if args.exclude_memory_heavy_models:
-            excluded_model_types = ["KNN", "RF", "XT"]
-            logger.info("排除内存密集型模型: KNN, RF, XT")
+        if excluded_model_types:
+            logger.info(f"排除模型类型: {', '.join(excluded_model_types)}")
 
         predictor = LeadScoringPredictor(
             label=target_label,
@@ -384,17 +439,19 @@ def main():
             eval_metric="log_loss",
             problem_type="multiclass",
             sample_weight="balance_weight",
-            max_memory_usage_ratio=args.max_memory_ratio,
+            max_memory_usage_ratio=max_memory_ratio,
+            memory_limit_gb=memory_limit_gb,
+            fit_strategy=fit_strategy,
             excluded_model_types=excluded_model_types,
-            num_folds_parallel=args.num_folds_parallel,
+            num_folds_parallel=num_folds_parallel,
         )
 
         train_kwargs = {
             "train_data": train_df,
-            "presets": args.preset,
-            "time_limit": args.time_limit,
+            "presets": preset,
+            "time_limit": time_limit,
             "excluded_columns": excluded_columns,
-            "num_bag_folds": args.num_bag_folds if args.num_bag_folds > 0 else None,
+            "num_bag_folds": num_bag_folds if num_bag_folds > 0 else None,
         }
         if len(valid_df) > 0:
             train_kwargs["tuning_data"] = valid_df
@@ -403,16 +460,16 @@ def main():
         best_model_name = predictor.get_model_info().get("best_model")
         comparison_config = {
             "enabled": False,
-            "baseline_family_requested": args.baseline_family,
+            "baseline_family_requested": baseline_family,
             "best_model_name": best_model_name,
             "baseline_model_name": None,
             "models": {},
         }
 
-        if args.enable_model_comparison and len(valid_df) > 0:
+        if enable_model_comparison and len(valid_df) > 0:
             valid_leaderboard_df = predictor.get_leaderboard(valid_df, silent=True)
             valid_leaderboard_df.to_csv(output_dir / "leaderboard_valid.csv", index=False, encoding="utf-8-sig")
-            baseline_selection = _select_baseline_model_from_leaderboard(valid_leaderboard_df, args.baseline_family)
+            baseline_selection = _select_baseline_model_from_leaderboard(valid_leaderboard_df, baseline_family)
             baseline_model_name = baseline_selection["baseline_model_name"]
             comparison_config.update(
                 {
@@ -437,7 +494,7 @@ def main():
                     ),
                 }
             logger.info(f"模型对比配置: {comparison_config}")
-        elif args.enable_model_comparison:
+        elif enable_model_comparison:
             logger.warning("启用了模型对比，但验证集为空，跳过 baseline 配置生成")
 
         # 5. 模型评估
@@ -448,7 +505,7 @@ def main():
         decision_policy = {"strategy": "argmax"}
         if comparison_config["enabled"]:
             decision_policy = comparison_config["models"][best_model_name]["decision_policy"]
-        elif args.label_mode == "hab" and len(valid_df) > 0:
+        elif label_mode == "hab" and len(valid_df) > 0:
             valid_proba = predictor.predict_proba(valid_df).reset_index(drop=True)
             decision_policy = optimize_hab_decision_policy(
                 valid_df[target_label].reset_index(drop=True),
@@ -458,7 +515,7 @@ def main():
 
         y_true = test_df[target_label].reset_index(drop=True)
         y_proba = predictor.predict_proba(test_df, model=best_model_name).reset_index(drop=True)
-        if args.label_mode == "hab":
+        if label_mode == "hab":
             y_pred = apply_hab_decision_policy(y_proba, decision_policy)
         else:
             y_pred = predictor.predict(test_df, model=best_model_name)
@@ -479,7 +536,7 @@ def main():
             )
         bucket_summary_df = pd.DataFrame()
         monotonicity_result = {"passed": False, "metric": None, "message": "未启用 HAB 桶验证"}
-        if args.label_mode == "hab":
+        if label_mode == "hab":
             evaluation_frame = test_df.reset_index(drop=True).copy()
             evaluation_frame["真实标签"] = y_true.values
             evaluation_frame["预测标签"] = y_pred.values if hasattr(y_pred, "values") else y_pred
@@ -547,17 +604,27 @@ def main():
             "metrics": classification_dict,
             "raw_metrics": raw_evaluation_results,
             "label_policy": label_policy,
-            "label_mode": args.label_mode,
+            "label_mode": label_mode,
             "decision_policy": decision_policy,
             "model_comparison": comparison_config,
             "split_info": split_info,
             "top_ratios": list(top_ratios),
             "monotonicity_check": monotonicity_result,
+            "training_profile": runtime_config["training_profile"],
+            "resource_config": {
+                "memory_limit_gb": memory_limit_gb,
+                "fit_strategy": fit_strategy,
+                "num_folds_parallel": num_folds_parallel,
+                "max_memory_ratio": max_memory_ratio,
+                "excluded_model_types": excluded_model_types,
+            },
         }
         _dump_json(output_dir / "evaluation_summary.json", evaluation_summary)
         feature_metadata["decision_policy"] = decision_policy
-        feature_metadata["label_mode"] = args.label_mode
+        feature_metadata["label_mode"] = label_mode
         feature_metadata["model_comparison"] = comparison_config
+        feature_metadata["training_profile"] = runtime_config["training_profile"]
+        feature_metadata["resource_config"] = evaluation_summary["resource_config"]
         _dump_json(output_dir / "feature_metadata.json", feature_metadata)
         _dump_json(output_dir / "model_comparison_config.json", comparison_config)
             
@@ -575,11 +642,13 @@ def main():
         predictor.save(
             extra_metadata={
                 "label_policy": label_policy,
-                "label_mode": args.label_mode,
+                "label_mode": label_mode,
                 "decision_policy": decision_policy,
                 "model_comparison": comparison_config,
                 "schema_contract": feature_metadata.get("schema_contract", {}),
                 "interaction_context": feature_metadata.get("interaction_context", {}),
+                "training_profile": runtime_config["training_profile"],
+                "resource_config": evaluation_summary["resource_config"],
             }
         )
         if comparison_config["enabled"]:
