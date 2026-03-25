@@ -42,6 +42,7 @@ from src.evaluation.ohab_metrics import (
 )
 from src.utils.helpers import (
     complete_process_if_running,
+    format_training_duration,
     get_timestamp,
     get_local_now,
     format_timestamp,
@@ -290,6 +291,14 @@ def main():
         model_path=args.model_path,
     )
     atexit.register(complete_process_if_running, TASK_NAME, os.getpid())
+    evaluation_start_time = get_local_now()
+
+    logger.info("=" * 60)
+    logger.info("OHAB 模型验证")
+    logger.info("=" * 60)
+    logger.info(f"评估开始时间: {evaluation_start_time.strftime('%Y-%m-%d %H:%M:%S%z')}")
+    logger.info(f"模型路径: {args.model_path}")
+    logger.info(f"数据路径: {args.data_path or './data/20260308-v2.csv'}")
 
     try:
         model_path = Path(args.model_path)
@@ -668,17 +677,35 @@ def main():
 
         logger.info(f"评估报告已保存: {report_path}")
 
+        evaluation_end_time = get_local_now()
+        duration_seconds = (evaluation_end_time - evaluation_start_time).total_seconds()
+        duration_text = format_training_duration(duration_seconds)
+        update_process_status(
+            TASK_NAME,
+            os.getpid(),
+            "completed",
+            duration_seconds=duration_seconds,
+            duration_human=duration_text,
+            output_dir=str(output_dir),
+        )
+
+        logger.info("=" * 60)
+        logger.info(f"评估总耗时: {duration_text}")
+        logger.info(f"评估结束时间: {evaluation_end_time.strftime('%Y-%m-%d %H:%M:%S%z')}")
+        logger.info(f"评估完成! 结果已保存至: {output_dir}")
+
         print("\n" + "=" * 60)
-        print("验证完成")
+        print("评估完成")
         print("=" * 60)
         primary_row = comparison_df[comparison_df["role"] == primary_role].iloc[0]
         print(f"准确率 Accuracy: {primary_row['accuracy']:.4f}")
         print(f"平衡准确率 Balanced Accuracy: {primary_row['balanced_accuracy']:.4f}")
         print(f"马修斯相关系数 MCC: {primary_row['mcc']:.4f}")
+        print(f"评估总耗时: {duration_text}")
         print(f"\n结果保存在: {output_dir}")
     except Exception as e:
         update_process_status(TASK_NAME, os.getpid(), "failed", error=str(e))
-        logger.exception("模型验证失败")
+        logger.exception("评估失败")
         raise
 
 
