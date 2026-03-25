@@ -98,7 +98,7 @@ def _append_failure_once(failures: list[str], name: str) -> None:
 
 def _candidate_prefixes_for_family(family: str) -> tuple[str, ...]:
     family = family.lower()
-    if family == "gbm":
+    if family in {"gbm", "gbdt", "lightgbm"}:
         return ("LightGBM", "LightGBMXT", "LightGBMLarge")
     if family == "cat":
         return ("CatBoost",)
@@ -252,7 +252,7 @@ def parse_args():
         "--baseline-family",
         type=str,
         default=None,
-        choices=["gbm", "cat", "xgb", "auto"],
+        choices=["gbm", "gbdt", "lightgbm", "cat", "xgb", "auto"],
         help="模型对比时的基线家族",
     )
     parser.add_argument(

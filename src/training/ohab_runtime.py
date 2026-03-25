@@ -11,6 +11,14 @@ from typing import Any
 
 DEFAULT_MEMORY_HEAVY_MODELS = ["RF", "XT", "KNN", "FASTAI", "NN_TORCH"]
 LEGACY_MEMORY_HEAVY_MODELS = ["RF", "XT", "KNN"]
+BASELINE_FAMILY_ALIASES = {
+    "gbm": "gbm",
+    "gbdt": "gbm",
+    "lightgbm": "gbm",
+    "cat": "cat",
+    "xgb": "xgb",
+    "auto": "auto",
+}
 
 TRAINING_PROFILES: dict[str, dict[str, Any]] = {
     "server_16g_compare": {
@@ -108,6 +116,16 @@ def _merge_model_types(base: list[str] | None, extra: list[str] | None) -> list[
         if source not in merged:
             merged.append(source)
     return merged or None
+
+
+def normalize_baseline_family(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = BASELINE_FAMILY_ALIASES.get(value.strip().lower())
+    if normalized is None:
+        valid_values = ", ".join(sorted(BASELINE_FAMILY_ALIASES))
+        raise ValueError(f"未知 baseline_family: {value}，可选值: {valid_values}")
+    return normalized
 
 
 def detect_system_resources() -> dict[str, Any]:
@@ -296,10 +314,10 @@ def resolve_training_config(args) -> dict[str, Any]:
             )
         ),
         "baseline_family": _coalesce(
-            getattr(args, "baseline_family", None),
-            _env("OHAB_BASELINE_FAMILY"),
-            profile.get("baseline_family"),
-            "gbm",
+            normalize_baseline_family(getattr(args, "baseline_family", None)),
+            normalize_baseline_family(_env("OHAB_BASELINE_FAMILY")),
+            normalize_baseline_family(profile.get("baseline_family")),
+            normalize_baseline_family("gbm"),
         ),
         "memory_limit_gb": memory_limit_gb,
         "fit_strategy": _coalesce(

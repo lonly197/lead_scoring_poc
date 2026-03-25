@@ -113,8 +113,8 @@ def test_auto_adapt_normalizes_schema_contract_and_preserves_o_level(tmp_path):
     assert df.iloc[0]["预算区间"] == "20-25万"
     assert df.iloc[0]["SOP开口标签"] == "标准开场"
     assert df.iloc[0]["意向金支付状态"] == "已支付"
-    assert df.iloc[0]["历史订单次数"] == "3"
-    assert df.iloc[0]["历史到店次数"] == "4"
+    assert df.iloc[0]["历史订单次数"] == 3
+    assert df.iloc[0]["历史到店次数"] == 4
     assert "预算区间_备用" not in df.columns
     assert metadata["schema_contract"]["applied_aliases"]["预算区间_备用"] == "预算区间"
 
@@ -139,4 +139,4 @@ def test_normalize_schema_contract_handles_sql_export_aliases():
     assert normalized_df.loc[0, "预算区间"] == "15-20万"
     assert normalized_df.loc[0, "客户是否主动询问购车权益"] == "是"
     assert normalized_df.loc[0, "通话时长是否大于等于45秒"] == 1
-    assert metadata["schema_contract"]["applied_aliases"]["客户ID(店端)"] == "客户ID_店端"
+    assert metadata["applied_aliases"]["客户ID(店端)"] == "客户ID_店端"

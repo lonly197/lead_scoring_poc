@@ -23,8 +23,7 @@ def ordered_hab_labels(labels: Iterable[str]) -> List[str]:
     """按业务顺序返回 HAB 标签列表。"""
     label_set = {str(label) for label in labels if pd.notna(label)}
     ordered = [label for label in HAB_LABEL_ORDER if label in label_set]
-    extras = sorted(label_set.difference(HAB_LABEL_ORDER))
-    return ordered + extras
+    return ordered
 
 
 def build_ohab_label_policy(

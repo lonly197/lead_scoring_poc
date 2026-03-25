@@ -127,3 +127,29 @@ def test_resolve_training_config_probe_profile_restores_only_nn_torch(monkeypatc
     assert resolved["fit_strategy"] == "sequential"
     assert resolved["num_folds_parallel"] == 1
     assert resolved["excluded_model_types"] == ["RF", "XT", "KNN", "FASTAI"]
+
+
+def test_resolve_training_config_normalizes_lightgbm_alias(monkeypatch):
+    monkeypatch.setenv("OHAB_BASELINE_FAMILY", "lightgbm")
+    monkeypatch.setattr(
+        ohab_runtime,
+        "detect_system_resources",
+        lambda: {"cpu_count": 8, "total_memory_gb": 15.45, "available_memory_gb": 10.96},
+    )
+
+    resolved = resolve_training_config(_make_args())
+
+    assert resolved["baseline_family"] == "gbm"
+
+
+def test_resolve_training_config_normalizes_gbdt_cli_alias(monkeypatch):
+    monkeypatch.delenv("OHAB_BASELINE_FAMILY", raising=False)
+    monkeypatch.setattr(
+        ohab_runtime,
+        "detect_system_resources",
+        lambda: {"cpu_count": 8, "total_memory_gb": 15.45, "available_memory_gb": 10.96},
+    )
+
+    resolved = resolve_training_config(_make_args(baseline_family="gbdt"))
+
+    assert resolved["baseline_family"] == "gbm"
