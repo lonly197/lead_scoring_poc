@@ -35,6 +35,8 @@ from src.models.predictor import LeadScoringPredictor
 from src.utils.helpers import (
     check_disk_space,
     complete_process_if_running,
+    format_training_duration,
+    get_local_now,
     get_preset_disk_requirement,
     get_timestamp,
     save_process_info,
@@ -142,9 +144,13 @@ def main():
 
     atexit.register(complete_process_if_running, TASK_NAME, os.getpid())
 
+    # 记录训练开始时间
+    train_start_time = get_local_now()
+
     logger.info("=" * 60)
     logger.info("到店预测模型训练 (统一自适应版)")
     logger.info("=" * 60)
+    logger.info(f"训练开始时间: {train_start_time.strftime('%Y-%m-%d %H:%M:%S%z')}")
     logger.info(f"数据路径: {data_path}")
     logger.info(f"目标变量: {target_label}")
 
@@ -230,7 +236,12 @@ def main():
         predictor.save()
         predictor.cleanup(keep_best_only=True)
 
+        # 计算并输出训练耗时
+        train_end_time = get_local_now()
+        duration_seconds = (train_end_time - train_start_time).total_seconds()
         logger.info("=" * 60)
+        logger.info(f"训练总耗时: {format_training_duration(duration_seconds)}")
+        logger.info(f"训练结束时间: {train_end_time.strftime('%Y-%m-%d %H:%M:%S%z')}")
         logger.info(f"训练完成! 模型已保存至: {output_dir}")
 
     except Exception as e:

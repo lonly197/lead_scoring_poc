@@ -29,6 +29,8 @@ from src.utils.helpers import (
     check_data_quality,
     check_disk_space,
     complete_process_if_running,
+    format_training_duration,
+    get_local_now,
     get_preset_disk_requirement,
     get_timestamp,
     save_process_info,
@@ -133,10 +135,14 @@ def main():
     # 注册退出处理
     atexit.register(complete_process_if_running, TASK_NAME, os.getpid())
 
+    # 记录训练开始时间
+    train_start_time = get_local_now()
+
     # 启动信息
     logger.info("=" * 60)
     logger.info("试驾预测模型训练")
     logger.info("=" * 60)
+    logger.info(f"训练开始时间: {train_start_time.strftime('%Y-%m-%d %H:%M:%S%z')}")
     logger.info(f"进程 ID: {os.getpid()}")
     logger.info(f"日志文件: {log_file}")
     logger.info(f"数据路径: {data_path}")
@@ -241,7 +247,12 @@ def main():
             model_name="test_drive_model",
         )
 
+        # 计算并输出训练耗时
+        train_end_time = get_local_now()
+        duration_seconds = (train_end_time - train_start_time).total_seconds()
         logger.info("=" * 60)
+        logger.info(f"训练总耗时: {format_training_duration(duration_seconds)}")
+        logger.info(f"训练结束时间: {train_end_time.strftime('%Y-%m-%d %H:%M:%S%z')}")
         logger.info("训练完成!")
         logger.info(f"模型路径: {output_dir}")
         logger.info(f"日志路径: {log_file}")
@@ -249,6 +260,7 @@ def main():
         print("\n" + "=" * 60)
         print("训练完成")
         print("=" * 60)
+        print(f"训练耗时: {format_training_duration(duration_seconds)}")
         print(f"ROC-AUC: {metrics.get('roc_auc', 'N/A'):.4f}")
         for k, v in topk_metrics.items():
             print(f"{k}: {v['hit_rate']:.2%}, Lift: {v['lift']:.2f}x")

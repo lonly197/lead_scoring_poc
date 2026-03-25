@@ -8,14 +8,13 @@
 import argparse
 import subprocess
 import sys
-from datetime import datetime
 from pathlib import Path
 
 # 添加项目根目录到路径
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
-from src.utils.helpers import get_timestamp
+from src.utils.helpers import get_timestamp, get_local_now, format_timestamp
 
 
 TASK_SCRIPT_ALIASES = {
@@ -54,8 +53,9 @@ def run_background(script_path: str, args: list[str], log_dir: str = "./outputs/
     print(f"命令: {cmd_str}")
 
     # 启动进程
+    start_time = get_local_now()
     with open(log_file, "w", encoding="utf-8") as f:
-        f.write(f"启动时间: {datetime.now().isoformat()}\n")
+        f.write(f"启动时间: {format_timestamp(start_time)}\n")
         f.write(f"命令: {cmd_str}\n")
         f.write("=" * 60 + "\n\n")
         f.flush()

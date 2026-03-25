@@ -97,6 +97,56 @@ def get_timestamp() -> str:
     return datetime.now().strftime("%Y%m%d_%H%M%S")
 
 
+def get_local_now() -> datetime:
+    """
+    获取当前时区感知的本地时间
+
+    Returns:
+        带时区信息的 datetime 对象
+    """
+    return datetime.now().astimezone()
+
+
+def format_timestamp(dt: datetime) -> str:
+    """
+    格式化带时区的时间戳
+
+    Args:
+        dt: datetime 对象
+
+    Returns:
+        格式化的时间字符串 (YYYY-MM-DD HH:MM:SS+TZ)
+    """
+    return dt.strftime("%Y-%m-%d %H:%M:%S%z")
+
+
+def format_training_duration(seconds: float) -> str:
+    """
+    格式化训练耗时为易读的中文格式
+
+    Args:
+        seconds: 秒数
+
+    Returns:
+        格式化的耗时字符串 (如 "1小时23分45秒")
+    """
+    if seconds < 0:
+        return "0秒"
+
+    hours, remainder = divmod(int(seconds), 3600)
+    minutes, secs = divmod(remainder, 60)
+
+    parts = []
+    if hours > 0:
+        parts.append(f"{hours}小时")
+    if minutes > 0:
+        parts.append(f"{minutes}分")
+    if secs > 0 or not parts:
+        parts.append(f"{secs}秒")
+
+    return "".join(parts)
+
+
 def print_separator(title: str = "", char: str = "=", width: int = 60) -> None:
     """
     打印分隔线
@@ -195,12 +245,14 @@ def save_process_info(
     """
     PROCESS_DIR.mkdir(parents=True, exist_ok=True)
 
+    start_time = get_local_now()
     info = {
         "task_name": task_name,
         "pid": pid,
         "command": command,
         "log_file": log_file,
-        "start_time": datetime.now().isoformat(),
+        "start_time": start_time.isoformat(),
+        "start_time_readable": format_timestamp(start_time),
         "status": "running",
         **kwargs,
     }
@@ -225,7 +277,9 @@ def update_process_status(task_name: str, pid: int, status: str, **kwargs: Any) 
     if info_path.exists():
         info = load_json(str(info_path))
         info["status"] = status
-        info["end_time"] = datetime.now().isoformat()
+        end_time = get_local_now()
+        info["end_time"] = end_time.isoformat()
+        info["end_time_readable"] = format_timestamp(end_time)
         info.update(kwargs)
         save_json(info, str(info_path))
 
@@ -276,7 +330,9 @@ def list_running_processes() -> list[Dict[str, Any]]:
                 except OSError:
                     # 进程已结束，更新状态
                     info["status"] = "terminated"
-                    info["end_time"] = datetime.now().isoformat()
+                    end_time = get_local_now()
+                    info["end_time"] = end_time.isoformat()
+                    info["end_time_readable"] = format_timestamp(end_time)
                     save_json(info, str(info_file))
         except Exception:
             continue
