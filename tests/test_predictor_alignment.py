@@ -11,6 +11,7 @@ from src.models.predictor import LeadScoringPredictor
 class FakeTabularPredictor:
     last_instance = None
     load_return = None
+    feature_importance_return = None
 
     def __init__(self, **kwargs):
         self.init_kwargs = kwargs
@@ -53,6 +54,8 @@ class FakeTabularPredictor:
 
     def feature_importance(self, data):
         self.last_feature_importance_columns = list(data.columns)
+        if FakeTabularPredictor.feature_importance_return is not None:
+            return FakeTabularPredictor.feature_importance_return
         feature_columns = [col for col in data.columns if col != self.label]
         return pd.Series([1.0] * len(feature_columns), index=feature_columns)
 
@@ -71,6 +74,7 @@ class FakeTabularPredictor:
 
 
 def install_fake_autogluon(monkeypatch):
+    FakeTabularPredictor.feature_importance_return = None
     autogluon_module = types.ModuleType("autogluon")
     tabular_module = types.ModuleType("autogluon.tabular")
     tabular_module.TabularPredictor = FakeTabularPredictor
@@ -224,6 +228,53 @@ def test_cleanup_can_keep_named_models(monkeypatch, tmp_path):
     predictor.cleanup(keep_best_only=False, keep_model_names=["FakeModel", "BaselineModel"])
 
     assert predictor._predictor.last_delete_models["models_to_keep"] == ["FakeModel", "BaselineModel"]
+
+
+def test_get_feature_importance_normalizes_series(monkeypatch, tmp_path):
+    install_fake_autogluon(monkeypatch)
+    FakeTabularPredictor.feature_importance_return = pd.Series(
+        [0.2, 0.9],
+        index=["feat_a", "feat_b"],
+    )
+
+    predictor = LeadScoringPredictor(label="label", output_path=str(tmp_path))
+    predictor._predictor = FakeTabularPredictor(label="label", path=str(tmp_path))
+    predictor._feature_columns = ["feat_a", "feat_b"]
+
+    importance_df = predictor.get_feature_importance(
+        pd.DataFrame({"feat_a": [1], "feat_b": [2], "label": [0]})
+    )
+
+    assert list(importance_df.columns) == ["feature", "importance"]
+    assert importance_df.to_dict(orient="records") == [
+        {"feature": "feat_b", "importance": 0.9},
+        {"feature": "feat_a", "importance": 0.2},
+    ]
+
+
+def test_get_feature_importance_normalizes_dataframe(monkeypatch, tmp_path):
+    install_fake_autogluon(monkeypatch)
+    FakeTabularPredictor.feature_importance_return = pd.DataFrame(
+        {
+            "importance": [0.2, 0.9],
+            "stddev": [0.01, 0.03],
+        },
+        index=pd.Index(["feat_a", "feat_b"], name="feature"),
+    )
+
+    predictor = LeadScoringPredictor(label="label", output_path=str(tmp_path))
+    predictor._predictor = FakeTabularPredictor(label="label", path=str(tmp_path))
+    predictor._feature_columns = ["feat_a", "feat_b"]
+
+    importance_df = predictor.get_feature_importance(
+        pd.DataFrame({"feat_a": [1], "feat_b": [2], "label": [0]})
+    )
+
+    assert list(importance_df.columns) == ["feature", "importance", "stddev"]
+    assert importance_df.to_dict(orient="records") == [
+        {"feature": "feat_b", "importance": 0.9, "stddev": 0.03},
+        {"feature": "feat_a", "importance": 0.2, "stddev": 0.01},
+    ]
 
 
 def test_train_passes_memory_and_ensemble_controls_with_autogluon_shape(monkeypatch, tmp_path):

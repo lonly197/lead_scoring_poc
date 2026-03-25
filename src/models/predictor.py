@@ -531,11 +531,43 @@ class LeadScoringPredictor:
 
         importance = self._predictor.feature_importance(aligned_test_data)
 
-        # 转换为 DataFrame
-        importance_df = pd.DataFrame({
-            "feature": importance.index,
-            "importance": importance.values,
-        }).sort_values("importance", ascending=False)
+        if isinstance(importance, pd.Series):
+            importance_df = importance.rename("importance").to_frame().reset_index()
+        elif isinstance(importance, pd.DataFrame):
+            importance_df = importance.copy().reset_index()
+            if "importance" not in importance_df.columns:
+                non_feature_columns = [col for col in importance_df.columns if col != "feature"]
+                if len(non_feature_columns) == 1:
+                    importance_df = importance_df.rename(
+                        columns={non_feature_columns[0]: "importance"}
+                    )
+                else:
+                    raise ValueError(
+                        "feature_importance 返回 DataFrame，但未找到 importance 列"
+                    )
+        else:
+            raise TypeError(
+                "feature_importance 返回了不支持的类型: "
+                f"{type(importance).__name__}"
+            )
+
+        if "feature" not in importance_df.columns:
+            if "index" in importance_df.columns:
+                importance_df = importance_df.rename(columns={"index": "feature"})
+            else:
+                importance_df = importance_df.rename(
+                    columns={importance_df.columns[0]: "feature"}
+                )
+
+        ordered_columns = ["feature", "importance"] + [
+            col for col in importance_df.columns
+            if col not in {"feature", "importance"}
+        ]
+        importance_df = (
+            importance_df.loc[:, ordered_columns]
+            .sort_values("importance", ascending=False)
+            .reset_index(drop=True)
+        )
 
         return importance_df
 

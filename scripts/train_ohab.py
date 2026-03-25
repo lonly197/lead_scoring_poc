@@ -77,6 +77,25 @@ def _dump_json(path: Path, payload: dict | list) -> None:
         json.dump(payload, f, ensure_ascii=False, indent=2, default=str)
 
 
+def _build_artifact_status(
+    training_complete: bool,
+    comparison_expected: bool,
+    supplemental_failures: list[str] | None = None,
+    completed_at: datetime | None = None,
+) -> dict:
+    return {
+        "training_complete": training_complete,
+        "comparison_expected": comparison_expected,
+        "supplemental_failures": supplemental_failures or [],
+        "completed_at": completed_at.isoformat() if completed_at else None,
+    }
+
+
+def _append_failure_once(failures: list[str], name: str) -> None:
+    if name not in failures:
+        failures.append(name)
+
+
 def _candidate_prefixes_for_family(family: str) -> tuple[str, ...]:
     family = family.lower()
     if family == "gbm":
@@ -435,14 +454,15 @@ def main():
         feature_metadata["feature_names_version"] = "ohab_schema_contract_v2"
         if adaptation_metadata.get("json_feature_source"):
             feature_metadata["json_feature_source"] = adaptation_metadata["json_feature_source"]
+        feature_metadata["artifact_status"] = _build_artifact_status(
+            training_complete=False,
+            comparison_expected=bool(enable_model_comparison),
+        )
 
         # 4. 训练模型
         logger.info("步骤 4/6: 模型训练")
         output_dir.mkdir(parents=True, exist_ok=True)
-        
-        # 保存防泄漏标记
-        with open(output_dir / "feature_metadata.json", "w", encoding="utf-8") as f:
-            json.dump(feature_metadata, f, ensure_ascii=False, indent=2)
+        _dump_json(output_dir / "feature_metadata.json", feature_metadata)
 
         excluded_columns = get_excluded_columns(target_label)
         if excluded_model_types:
@@ -561,40 +581,6 @@ def main():
             monotonicity_result = check_hab_monotonicity(bucket_summary_df)
             logger.info(f"HAB 行为分层检查: {monotonicity_result}")
 
-        # 计算特征重要性
-        logger.info("计算特征重要性...")
-        importance_df = predictor.get_feature_importance(test_df)
-        leaderboard_df = predictor.get_leaderboard(test_df, silent=True)
-
-        # 可视化特征重要性
-        plot_feature_importance(
-            importance_df, 
-            output_path=str(output_dir / "feature_importance.png")
-        )
-
-        # 保存特征重要性原始数据
-        importance_df.to_csv(output_dir / "feature_importance.csv", index=False, encoding="utf-8-sig")
-        importance_df.to_json(output_dir / "feature_importance.json", orient="records", force_ascii=False, indent=2)
-        
-        # 统计业务维度贡献
-        feature_importance_dict = dict(zip(importance_df['feature'], importance_df['importance']))
-        dimension_contribution = calculate_dimension_contribution(feature_importance_dict)
-        
-        logger.info("业务维度贡献分析:")
-        for dim, score in dimension_contribution.items():
-            logger.info(f"  - {dim}: {score:.4f}")
-            
-        # 可视化业务维度贡献
-        plot_dimension_contribution(
-            dimension_contribution,
-            output_path=str(output_dir / "business_dimension_contribution.png")
-        )
-        
-        # 保存业务维度贡献结果
-        with open(output_dir / "business_dimension_contribution.json", "w", encoding="utf-8") as f:
-            json.dump(dimension_contribution, f, ensure_ascii=False, indent=2)
-
-        leaderboard_df.to_csv(output_dir / "leaderboard.csv", index=False, encoding="utf-8-sig")
         confusion_df.to_csv(output_dir / "confusion_matrix.csv", encoding="utf-8-sig")
         _dump_json(output_dir / "classification_report.json", classification_dict)
         _dump_json(output_dir / "class_ranking_report.json", class_ranking_report)
@@ -615,6 +601,7 @@ def main():
             predictions_df[f"概率_{col}"] = y_proba[col].values
         predictions_df.to_csv(output_dir / "predictions_test.csv", index=False, encoding="utf-8-sig")
 
+        supplemental_failures: list[str] = []
         evaluation_summary = {
             "metrics": classification_dict,
             "raw_metrics": raw_evaluation_results,
@@ -626,6 +613,7 @@ def main():
             "top_ratios": list(top_ratios),
             "monotonicity_check": monotonicity_result,
             "training_profile": runtime_config["training_profile"],
+            "supplemental_failures": supplemental_failures.copy(),
             "resource_config": {
                 "memory_limit_gb": memory_limit_gb,
                 "fit_strategy": fit_strategy,
@@ -636,24 +624,12 @@ def main():
                 "resource_tuning": resource_tuning,
             },
         }
-        _dump_json(output_dir / "evaluation_summary.json", evaluation_summary)
         feature_metadata["decision_policy"] = decision_policy
         feature_metadata["label_mode"] = label_mode
         feature_metadata["model_comparison"] = comparison_config
         feature_metadata["training_profile"] = runtime_config["training_profile"]
         feature_metadata["resource_config"] = evaluation_summary["resource_config"]
-        _dump_json(output_dir / "feature_metadata.json", feature_metadata)
-        _dump_json(output_dir / "model_comparison_config.json", comparison_config)
-            
-        # 自动生成 Top-K 列表
-        try:
-            from scripts.generate_topk import generate_topk_from_predictor
-            topk_path = Path(config.output.topk_dir) / f"topk_ohab_{get_timestamp()}.csv"
-            generate_topk_from_predictor(predictor, test_df, str(topk_path))
-            logger.info(f"Top-K 列表已生成: {topk_path}")
-        except ImportError:
-            logger.warning("scripts.generate_topk 未找到，跳过 Top-K 生成")
-            
+
         # 6. 保存与清理
         logger.info("步骤 6/6: 保存与清理")
         predictor.save(
@@ -676,8 +652,81 @@ def main():
         else:
             predictor.cleanup(keep_best_only=True)
 
-        # 计算并输出训练耗时
+        core_completed_at = get_local_now()
+        feature_metadata["artifact_status"] = _build_artifact_status(
+            training_complete=True,
+            comparison_expected=bool(enable_model_comparison),
+            supplemental_failures=supplemental_failures.copy(),
+            completed_at=core_completed_at,
+        )
+        _dump_json(output_dir / "evaluation_summary.json", evaluation_summary)
+        _dump_json(output_dir / "feature_metadata.json", feature_metadata)
+        _dump_json(output_dir / "model_comparison_config.json", comparison_config)
+
+        logger.info("开始生成补充产物...")
+
+        try:
+            leaderboard_df = predictor.get_leaderboard(test_df, silent=True)
+            leaderboard_df.to_csv(output_dir / "leaderboard.csv", index=False, encoding="utf-8-sig")
+        except Exception as e:
+            logger.warning(f"生成 leaderboard 失败: {e}", exc_info=True)
+            _append_failure_once(supplemental_failures, "leaderboard")
+
+        try:
+            logger.info("计算特征重要性...")
+            importance_df = predictor.get_feature_importance(test_df)
+            plot_feature_importance(
+                importance_df,
+                output_path=str(output_dir / "feature_importance.png")
+            )
+            importance_df.to_csv(output_dir / "feature_importance.csv", index=False, encoding="utf-8-sig")
+            importance_df.to_json(output_dir / "feature_importance.json", orient="records", force_ascii=False, indent=2)
+
+            feature_importance_dict = dict(zip(importance_df["feature"], importance_df["importance"]))
+            dimension_contribution = calculate_dimension_contribution(feature_importance_dict)
+
+            logger.info("业务维度贡献分析:")
+            for dim, score in dimension_contribution.items():
+                logger.info(f"  - {dim}: {score:.4f}")
+
+            plot_dimension_contribution(
+                dimension_contribution,
+                output_path=str(output_dir / "business_dimension_contribution.png")
+            )
+            with open(output_dir / "business_dimension_contribution.json", "w", encoding="utf-8") as f:
+                json.dump(dimension_contribution, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            logger.warning(f"生成特征重要性/业务维度补充产物失败: {e}", exc_info=True)
+            _append_failure_once(supplemental_failures, "feature_importance")
+            _append_failure_once(supplemental_failures, "business_dimension_contribution")
+
+        try:
+            from scripts.generate_topk import generate_topk_from_predictor
+            topk_path = Path(config.output.topk_dir) / f"topk_ohab_{get_timestamp()}.csv"
+            generate_topk_from_predictor(predictor, test_df, str(topk_path))
+            logger.info(f"Top-K 列表已生成: {topk_path}")
+        except Exception as e:
+            logger.warning(f"生成 Top-K 列表失败: {e}", exc_info=True)
+            _append_failure_once(supplemental_failures, "topk")
+
+        if supplemental_failures:
+            logger.warning(
+                f"补充产物生成存在失败项: {supplemental_failures}。"
+                "核心模型产物已成功保存，仍可执行 baseline vs best 验证。"
+            )
+
         train_end_time = get_local_now()
+        feature_metadata["artifact_status"] = _build_artifact_status(
+            training_complete=True,
+            comparison_expected=bool(enable_model_comparison),
+            supplemental_failures=supplemental_failures.copy(),
+            completed_at=train_end_time,
+        )
+        evaluation_summary["supplemental_failures"] = supplemental_failures.copy()
+        _dump_json(output_dir / "evaluation_summary.json", evaluation_summary)
+        _dump_json(output_dir / "feature_metadata.json", feature_metadata)
+
+        # 计算并输出训练耗时
         duration_seconds = (train_end_time - train_start_time).total_seconds()
         logger.info("=" * 60)
         logger.info(f"训练总耗时: {format_training_duration(duration_seconds)}")

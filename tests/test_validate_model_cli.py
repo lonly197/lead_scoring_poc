@@ -4,8 +4,10 @@ import types
 from argparse import Namespace
 from pathlib import Path
 
+import pytest
 
-def load_validate_script():
+
+def load_validate_script(monkeypatch):
     pandas_module = types.ModuleType("pandas")
 
     class DummyDataFrame:
@@ -77,6 +79,7 @@ def load_validate_script():
 
     helpers_module = types.ModuleType("src.utils.helpers")
     helpers_module.complete_process_if_running = lambda *args, **kwargs: None
+    helpers_module.format_training_duration = lambda seconds: f"{seconds}s"
     helpers_module.get_timestamp = lambda: "20260325_120000"
     helpers_module.get_local_now = lambda: None
     helpers_module.format_timestamp = lambda dt: "2026-03-25 12:00:00+0800"
@@ -84,15 +87,15 @@ def load_validate_script():
     helpers_module.setup_logging = lambda *args, **kwargs: None
     helpers_module.update_process_status = lambda *args, **kwargs: None
 
-    sys.modules["pandas"] = pandas_module
-    sys.modules["autogluon"] = autogluon_module
-    sys.modules["autogluon.tabular"] = tabular_module
-    sys.modules["config.config"] = config_module
-    sys.modules["src.data.label_policy"] = label_policy_module
-    sys.modules["src.data.loader"] = loader_module
-    sys.modules["src.evaluation.business_logic"] = business_logic_module
-    sys.modules["src.evaluation.ohab_metrics"] = ohab_metrics_module
-    sys.modules["src.utils.helpers"] = helpers_module
+    monkeypatch.setitem(sys.modules, "pandas", pandas_module)
+    monkeypatch.setitem(sys.modules, "autogluon", autogluon_module)
+    monkeypatch.setitem(sys.modules, "autogluon.tabular", tabular_module)
+    monkeypatch.setitem(sys.modules, "config.config", config_module)
+    monkeypatch.setitem(sys.modules, "src.data.label_policy", label_policy_module)
+    monkeypatch.setitem(sys.modules, "src.data.loader", loader_module)
+    monkeypatch.setitem(sys.modules, "src.evaluation.business_logic", business_logic_module)
+    monkeypatch.setitem(sys.modules, "src.evaluation.ohab_metrics", ohab_metrics_module)
+    monkeypatch.setitem(sys.modules, "src.utils.helpers", helpers_module)
 
     module_name = "scripts.validate_model"
     script_path = Path(__file__).resolve().parents[1] / "scripts" / "validate_model.py"
@@ -107,7 +110,7 @@ def load_validate_script():
 
 
 def test_validate_model_run_background_strips_daemon_and_appends_log_file(monkeypatch, tmp_path):
-    validate_script = load_validate_script()
+    validate_script = load_validate_script(monkeypatch)
 
     captured = {}
 
@@ -154,7 +157,7 @@ def test_validate_model_run_background_strips_daemon_and_appends_log_file(monkey
 
 
 def test_validate_model_main_uses_background_branch(monkeypatch):
-    validate_script = load_validate_script()
+    validate_script = load_validate_script(monkeypatch)
     captured = {}
 
     def fake_run_background(args):
@@ -175,3 +178,68 @@ def test_validate_model_main_uses_background_branch(monkeypatch):
         "daemon": True,
         "data_path": "./data/202602~03.tsv",
     }
+
+
+def test_validate_model_artifacts_rejects_missing_artifact_status(monkeypatch):
+    validate_script = load_validate_script(monkeypatch)
+
+    with pytest.raises(RuntimeError, match="缺少 artifact_status"):
+        validate_script.validate_model_artifacts({}, Path("outputs/models/ohab_model"))
+
+
+def test_validate_model_artifacts_rejects_incomplete_training(monkeypatch):
+    validate_script = load_validate_script(monkeypatch)
+
+    with pytest.raises(RuntimeError, match="尚未完成训练"):
+        validate_script.validate_model_artifacts(
+            {
+                "artifact_status": {
+                    "training_complete": False,
+                    "comparison_expected": True,
+                    "supplemental_failures": [],
+                    "completed_at": None,
+                }
+            },
+            Path("outputs/models/ohab_model"),
+        )
+
+
+def test_validate_model_artifacts_rejects_missing_comparison_models(monkeypatch):
+    validate_script = load_validate_script(monkeypatch)
+
+    with pytest.raises(RuntimeError, match="缺少 baseline/best 对比元数据"):
+        validate_script.validate_model_artifacts(
+            {
+                "artifact_status": {
+                    "training_complete": True,
+                    "comparison_expected": True,
+                    "supplemental_failures": [],
+                    "completed_at": "2026-03-25T20:00:00+08:00",
+                },
+                "model_comparison": {"enabled": True, "models": {}},
+            },
+            Path("outputs/models/ohab_model"),
+        )
+
+
+def test_validate_model_artifacts_accepts_complete_metadata(monkeypatch):
+    validate_script = load_validate_script(monkeypatch)
+
+    validate_script.validate_model_artifacts(
+        {
+            "artifact_status": {
+                "training_complete": True,
+                "comparison_expected": True,
+                "supplemental_failures": ["feature_importance"],
+                "completed_at": "2026-03-25T20:00:00+08:00",
+            },
+            "model_comparison": {
+                "enabled": True,
+                "models": {
+                    "BaselineModel": {"role": "baseline"},
+                    "BestModel": {"role": "best"},
+                },
+            },
+        },
+        Path("outputs/models/ohab_model"),
+    )

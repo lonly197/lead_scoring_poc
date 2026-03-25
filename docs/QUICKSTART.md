@@ -72,6 +72,7 @@ uv run python scripts/run.py train_ohab --daemon --preset high_quality
 - `O` 视为已成交/已锁单状态，不进入常规评级桶
 - 可选 `--enable-model-comparison`，保留一个 AutoGluon 内部子模型作为基线（推荐 `gbm`）
 - 训练完成后会在模型目录输出：
+  - `feature_metadata.json`（含 `artifact_status`，用于校验训练是否完整）
   - `feature_importance.*`
   - `business_dimension_contribution.*`
   - `predictions_test.csv`
@@ -288,6 +289,9 @@ uv run python scripts/validate_model.py \
 **验证行为说明**：
 - 若模型元数据中存在 `split_info`，脚本会自动按训练时记录的 `valid_end` 只评估 OOT 测试集，避免混入训练段和验证段数据。
 - 若验证数据中存在 `is_final_ordered`，脚本会额外输出“AI 评级 vs 最终下定”的业务转化统计，但该列不会参与模型特征。
+- 验证脚本只接受由统一入口 `train_ohab.py` / `scripts/run.py train_ohab` 生成且 `feature_metadata.json -> artifact_status.training_complete=true` 的模型目录。
+- 若模型目录缺少 `artifact_status`、缺少 baseline/best 对比元数据，或来自旧的 `ohab_oot` 流程，`validate_model.py` 会直接报错并要求重新训练。
+- 若训练仅缺少 `feature_importance` / `business_dimension_contribution` / `topk` 等补充产物，仍可继续做 baseline vs best 验证，但客户报告中的特征贡献与 Top 特征章节会为空。
 
 ---
 

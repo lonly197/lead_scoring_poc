@@ -355,3 +355,69 @@ uv run python scripts/monitor.py status
 # 查看训练日志
 uv run python scripts/monitor.py log train_ohab -f
 ```
+
+---
+
+## validate_model 提示模型未完成或缺少对比元数据
+
+**问题现象**：
+
+```text
+模型目录缺少 artifact_status
+```
+
+或：
+
+```text
+模型目录尚未完成训练
+```
+
+或：
+
+```text
+模型目录缺少 baseline/best 对比元数据
+```
+
+**问题原因**：
+
+1. 当前 `validate_model.py` 只接受统一入口 `train_ohab.py` / `scripts/run.py train_ohab` 生成的完整模型目录
+2. 若训练在 `feature_importance`、业务维度、Top-K 等补充产物阶段之前或期间异常退出，模型目录可能只写出早期 `feature_metadata.json`
+3. 旧的 `ohab_oot` 训练流程或历史模型目录不包含新的 `artifact_status` 标记，验证脚本会直接拒绝继续运行
+
+**排查建议**：
+
+```bash
+# 1. 查看最新训练日志，确认是否在“步骤 5/6”或特征重要性阶段报错
+uv run python scripts/monitor.py log train_ohab -f
+
+# 2. 检查模型目录是否包含完整核心产物
+ls outputs/models/ohab_model/
+
+# 3. 检查最终元数据是否标记训练完成
+cat outputs/models/ohab_model/feature_metadata.json
+```
+
+**正确恢复方式**：
+
+```bash
+uv run python scripts/run.py train_ohab --daemon \
+    --data-path ./data/202602~03.tsv \
+    --training-profile server_16g_compare \
+    --train-end 2026-03-15 \
+    --valid-end 2026-03-20
+```
+
+训练完成后，确认模型目录中至少存在：
+
+- `feature_metadata.json`
+- `evaluation_summary.json`
+- `model_comparison_config.json`
+- `predictions_test.csv`
+
+然后再执行：
+
+```bash
+uv run python scripts/validate_model.py \
+    --model-path ./outputs/models/ohab_model \
+    --data-path ./data/202602~03.tsv
+```

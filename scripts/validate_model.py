@@ -61,6 +61,35 @@ def load_feature_metadata(model_path: Path) -> dict:
     return {}
 
 
+def validate_model_artifacts(metadata: dict, model_path: Path) -> None:
+    """校验模型目录是否为统一训练入口产出的完整模型。"""
+    artifact_status = metadata.get("artifact_status")
+    if not isinstance(artifact_status, dict):
+        raise RuntimeError(
+            f"模型目录缺少 artifact_status: {model_path}。"
+            "该模型可能来自旧训练流程或训练未完成，请重新运行 train_ohab.py。"
+        )
+
+    if artifact_status.get("training_complete") is not True:
+        raise RuntimeError(
+            f"模型目录尚未完成训练: {model_path}。"
+            "请重新运行 train_ohab.py，等待核心产物全部写出后再执行 validate_model.py。"
+        )
+
+    comparison_expected = bool(artifact_status.get("comparison_expected"))
+    comparison_config = metadata.get("model_comparison", {})
+    comparison_models = (
+        comparison_config.get("models", {})
+        if isinstance(comparison_config, dict)
+        else {}
+    )
+    if comparison_expected and not comparison_models:
+        raise RuntimeError(
+            f"模型目录缺少 baseline/best 对比元数据: {model_path}。"
+            "当前模型不可用于正式汇报，请重新运行 train_ohab.py。"
+        )
+
+
 def dump_json(path: Path, payload: dict | list) -> None:
     with open(path, "w", encoding="utf-8") as f:
         json.dump(payload, f, ensure_ascii=False, indent=2, default=str)
@@ -313,6 +342,16 @@ def main():
                 logger.error("  uv run python scripts/train_ohab.py")
                 sys.exit(1)
 
+        metadata = load_feature_metadata(model_path)
+        validate_model_artifacts(metadata, model_path)
+        supplemental_failures = metadata.get("artifact_status", {}).get("supplemental_failures", [])
+        if supplemental_failures:
+            logger.warning(
+                "模型存在补充产物缺失: %s。"
+                "不影响 baseline vs best 验证，但会影响特征贡献/Top 特征/Top-K 等扩展产物。",
+                supplemental_failures,
+            )
+
         output_dir = Path(args.output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
         top_ratios = tuple(float(item.strip()) / 100 for item in args.report_topk.split(",") if item.strip())
@@ -346,7 +385,6 @@ def main():
             logger.info(f"过滤 Unknown 后: {len(df)} 行")
 
         # 自动识别防泄漏切分标记 (Smart Test Set Filtering)
-        metadata = load_feature_metadata(model_path)
         split_info = metadata.get("split_info", {})
         label_policy = metadata.get("label_policy", {})
         label_mode = metadata.get("label_mode", "ohab")
