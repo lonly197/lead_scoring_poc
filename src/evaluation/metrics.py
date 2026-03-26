@@ -398,6 +398,9 @@ def plot_lift_chart(
         output_path: 输出路径
     """
     try:
+        # 使用非交互式后端，适配服务器 CLI 环境
+        import matplotlib
+        matplotlib.use("Agg")
         import matplotlib.pyplot as plt
         import seaborn as sns
 
@@ -457,6 +460,9 @@ def plot_feature_importance(
         output_path: 输出路径
     """
     try:
+        # 使用非交互式后端，适配服务器 CLI 环境
+        import matplotlib
+        matplotlib.use("Agg")
         import matplotlib.pyplot as plt
         import seaborn as sns
 

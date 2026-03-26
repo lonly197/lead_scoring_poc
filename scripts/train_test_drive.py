@@ -114,6 +114,13 @@ def parse_args():
         default=None,
         help="并行训练的 fold 数量（默认自动，低内存机器建议 2-3）",
     )
+    parser.add_argument(
+        "--generate-plots",
+        dest="generate_plots",
+        action="store_true",
+        default=False,
+        help="生成 PNG 图表（默认关闭，服务器 CLI 环境建议保持关闭）",
+    )
 
     return parser.parse_args()
 
@@ -254,9 +261,11 @@ def main():
 
         try:
             importance = predictor.get_feature_importance(test_df)
-            plot_feature_importance(
-                importance, output_path=str(output_dir / "feature_importance.png")
-            )
+            importance.to_csv(output_dir / "feature_importance.csv", index=False, encoding="utf-8-sig")
+            if args.generate_plots:
+                plot_feature_importance(
+                    importance, output_path=str(output_dir / "feature_importance.png")
+                )
         except Exception as e:
             logger.warning(f"特征重要性计算失败: {e}")
             importance = None

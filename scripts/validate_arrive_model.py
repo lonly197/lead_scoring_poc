@@ -91,6 +91,13 @@ def parse_args():
     parser.add_argument("--target", type=str, default="到店标签_14天", help="目标变量名")
     parser.add_argument("--output-dir", type=str, default="outputs/validation_arrive", help="输出目录")
     parser.add_argument("--report-topk", type=str, default="100,500,1000", help="Top-K 列表")
+    parser.add_argument(
+        "--generate-plots",
+        dest="generate_plots",
+        action="store_true",
+        default=False,
+        help="生成 PNG 图表（默认关闭，服务器 CLI 环境建议保持关闭）",
+    )
     return parser.parse_args()
 
 
@@ -193,15 +200,17 @@ def main():
         try:
             importance = predictor.get_feature_importance(df_processed)
             importance.to_csv(output_dir / "feature_importance.csv", index=False, encoding="utf-8-sig")
-            plot_feature_importance(importance, output_path=str(output_dir / "feature_importance.png"))
+            if args.generate_plots:
+                plot_feature_importance(importance, output_path=str(output_dir / "feature_importance.png"))
         except Exception as exc:
             logger.warning("特征重要性计算失败: %s", exc)
             importance = None
 
-        try:
-            plot_lift_chart(decile_lift, output_path=str(output_dir / "lift_chart.png"))
-        except Exception as exc:
-            logger.warning("Lift 图生成失败: %s", exc)
+        if args.generate_plots:
+            try:
+                plot_lift_chart(decile_lift, output_path=str(output_dir / "lift_chart.png"))
+            except Exception as exc:
+                logger.warning("Lift 图生成失败: %s", exc)
 
         with open(output_dir / "evaluation_report.txt", "w", encoding="utf-8") as f:
             f.write("到店模型评估报告\n")

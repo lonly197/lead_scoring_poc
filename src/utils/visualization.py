@@ -10,6 +10,9 @@ import logging
 import warnings
 from pathlib import Path
 
+# 使用非交互式后端，适配服务器 CLI 环境
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
