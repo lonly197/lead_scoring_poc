@@ -36,7 +36,6 @@ packages = ["src"]
 
 [tool.uv]
 extra-index-url = [
-    "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple",
     "https://mirrors.aliyun.com/pypi/simple/",
 ]
 required-environments = [
