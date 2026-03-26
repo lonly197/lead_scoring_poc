@@ -8,6 +8,7 @@
 """
 
 import logging
+import hashlib
 from copy import deepcopy
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -102,11 +103,15 @@ def _group_random_split(
     else:
         raise ValueError(f"不支持的 group_by: {group_by}")
 
-    group_frame = (
-        working_df.groupby("split_group_key")[target_label]
-        .agg(lambda s: s.mode().iloc[0] if not s.mode().empty else s.iloc[0])
+    grouped_counts = (
+        working_df.groupby(["split_group_key", target_label], dropna=False)
+        .size()
+        .rename("row_count")
         .reset_index()
+        .sort_values(["split_group_key", "row_count", target_label], ascending=[True, False, True])
     )
+    dominant_idx = grouped_counts.groupby("split_group_key")["row_count"].idxmax()
+    group_frame = grouped_counts.loc[dominant_idx, ["split_group_key", target_label]].reset_index(drop=True)
     train_groups, valid_groups, test_groups = _stratified_random_split(
         group_frame,
         target_label=target_label,
@@ -122,11 +127,21 @@ def _group_random_split(
     valid_df = working_df[working_df["split_group_key"].isin(valid_keys)].copy()
     test_df = working_df[working_df["split_group_key"].isin(test_keys)].copy()
 
+    digest_payload = "|".join(
+        [
+            f"train:{len(train_keys)}:{int(pd.util.hash_pandas_object(train_groups['split_group_key'], index=False).sum()) if len(train_groups) else 0}",
+            f"valid:{len(valid_keys)}:{int(pd.util.hash_pandas_object(valid_groups['split_group_key'], index=False).sum()) if len(valid_groups) else 0}",
+            f"test:{len(test_keys)}:{int(pd.util.hash_pandas_object(test_groups['split_group_key'], index=False).sum()) if len(test_groups) else 0}",
+        ]
+    )
     split_metadata = {
         "split_group_mode": group_by,
-        "train_group_keys": sorted(train_keys),
-        "valid_group_keys": sorted(valid_keys),
-        "test_group_keys": sorted(test_keys),
+        "group_counts": {
+            "train": len(train_keys),
+            "valid": len(valid_keys),
+            "test": len(test_keys),
+        },
+        "group_key_fingerprint": hashlib.sha1(digest_payload.encode("utf-8")).hexdigest()[:16],
     }
     return train_df, valid_df, test_df, split_metadata
 
@@ -828,7 +843,11 @@ def smart_split_data(
         )
         split_metadata["mode"] = "random"
         split_metadata.update(group_metadata)
-        split_metadata["id_column"] = "线索唯一ID"
+        id_col = "线索唯一ID"
+        if id_col in test_df.columns:
+            split_metadata["test_ids"] = test_df[id_col].tolist()
+            split_metadata["id_column"] = id_col
+        split_metadata["test_indices"] = test_df.index.tolist()
         return train_df, valid_df, test_df, split_metadata
 
     if split_mode == "manual_oot":

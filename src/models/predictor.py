@@ -299,7 +299,7 @@ class LeadScoringPredictor:
 
         if self.max_memory_usage_ratio is not None:
             ag_args_fit = dict(fit_kwargs.get("ag_args_fit") or {})
-            ag_args_fit["max_memory_usage_ratio"] = self.max_memory_usage_ratio
+            ag_args_fit["ag.max_memory_usage_ratio"] = self.max_memory_usage_ratio
             fit_kwargs["ag_args_fit"] = ag_args_fit
             logger.info(f"内存使用比例限制: {self.max_memory_usage_ratio}")
 

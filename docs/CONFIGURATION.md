@@ -41,6 +41,10 @@ OHAB_AUTO_OOT_MIN_DAYS=90
 OHAB_PIPELINE_MODE=two_stage
 OHAB_SPLIT_GROUP_MODE=phone_or_lead
 OHAB_FEATURE_PROFILE=auto_scorecard
+OHAB_ENABLE_AUTO_DEGRADE=true
+OHAB_ENABLE_PREP_CACHE=true
+OHAB_FORCE_REBUILD_CACHE=false
+OHAB_ENABLE_RETRY_ON_MEMORY_ERROR=true
 
 # 输出配置
 OUTPUT_DIR=./outputs
@@ -117,12 +121,16 @@ OUTPUT_DIR=./outputs
 | `OHAB_PIPELINE_MODE` | 训练流水线模式 | `two_stage` |
 | `OHAB_SPLIT_GROUP_MODE` | 随机切分分组键策略 | `phone_or_lead` |
 | `OHAB_FEATURE_PROFILE` | 特征筛选配置 | `auto_scorecard` |
+| `OHAB_ENABLE_AUTO_DEGRADE` | 遇到高风险资源组合时自动降级 | `true` |
+| `OHAB_ENABLE_PREP_CACHE` | 启用步骤 1-3 预处理缓存 | `true` |
+| `OHAB_FORCE_REBUILD_CACHE` | 强制重建预处理缓存 | `false` |
+| `OHAB_ENABLE_RETRY_ON_MEMORY_ERROR` | AutoGluon 内存失败后自动重试一次 | `true` |
 
 ### 内置训练档位
 
 | 档位 | 适用场景 | 关键配置 |
 |------|----------|----------|
-| `server_16g_compare` | 16GB 服务器正式推荐档 | `good_quality + 3 folds + balanced_accuracy + two_stage + random group split` |
+| `server_16g_compare` | 16GB 服务器正式推荐档 | `good_quality + 3 folds + balanced_accuracy + two_stage + random group split`，并在资源风险过高时自动降级 |
 | `server_16g_fast` | 快速验证流程 | `medium_quality + 0 folds` |
 | `server_16g_probe_nn_torch` | 16GB 服务器受控实验档 | `good_quality + 0 folds + 仅恢复 NN_TORCH` |
 | `server_16g_compare_balanced` | 与正式档相同的业务导向档 | `balanced_accuracy + two_stage` |

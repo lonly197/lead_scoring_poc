@@ -10,9 +10,11 @@ OHAB 评级预测训练脚本 (统一智能版)
 
 import argparse
 import atexit
+import hashlib
 import json
 import logging
 import os
+import shutil
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -45,6 +47,8 @@ from src.evaluation.ohab_metrics import (
 from src.models.predictor import LeadScoringPredictor
 from src.evaluation.business_logic import calculate_dimension_contribution, BUSINESS_DIMENSION_MAP
 from src.training.ohab_runtime import resolve_training_config
+from src.training.ohab_runtime import build_resource_plan
+from src.training.prep_cache import PrepCacheManager, build_prep_cache_key
 from src.training.hab_pipeline import (
     combine_stage_predictions,
     compute_pipeline_metrics,
@@ -97,6 +101,87 @@ def _parse_report_topk(raw_value: str) -> tuple[float, ...]:
 def _dump_json(path: Path, payload: dict | list) -> None:
     with open(path, "w", encoding="utf-8") as f:
         json.dump(payload, f, ensure_ascii=False, indent=2, default=str)
+
+
+def _excluded_columns_version(columns: list[str]) -> str:
+    payload = "|".join(sorted(columns))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:12]
+
+
+def _estimate_text_feature_count(df: pd.DataFrame, candidate_columns: list[str]) -> int:
+    text_count = 0
+    for column in candidate_columns:
+        if column not in df.columns or not pd.api.types.is_object_dtype(df[column]):
+            continue
+        sample = df[column].dropna().astype(str).head(200)
+        if sample.empty:
+            continue
+        avg_len = float(sample.str.len().mean())
+        if avg_len >= 24:
+            text_count += 1
+    return text_count
+
+
+def _is_memory_related_training_failure(exc: Exception) -> bool:
+    message = str(exc)
+    memory_patterns = [
+        "No models were trained successfully",
+        "Not enough memory",
+        "max safe size",
+    ]
+    return any(pattern in message for pattern in memory_patterns)
+
+
+def _build_retry_overrides(
+    *,
+    preset: str,
+    num_bag_folds: int,
+    max_memory_ratio: float | None,
+) -> dict:
+    return {
+        "preset": "medium_quality" if preset != "medium_quality" else preset,
+        "num_bag_folds": 0 if num_bag_folds and num_bag_folds > 0 else num_bag_folds,
+        "max_memory_ratio": 0.85 if max_memory_ratio is None or max_memory_ratio < 0.85 else max_memory_ratio,
+    }
+
+
+def _train_with_retry(
+    *,
+    predictor_factory,
+    train_kwargs: dict,
+    output_path: Path,
+    stage_name: str,
+    enable_retry_on_memory_error: bool,
+    preset: str,
+    num_bag_folds: int,
+    max_memory_ratio: float | None,
+):
+    predictor = predictor_factory(max_memory_ratio=max_memory_ratio)
+    try:
+        predictor.train(**train_kwargs, presets=preset, num_bag_folds=num_bag_folds if num_bag_folds > 0 else None)
+        return predictor, {"retried": False, "overrides": {}}
+    except Exception as exc:
+        if not enable_retry_on_memory_error or not _is_memory_related_training_failure(exc):
+            raise
+
+        retry_overrides = _build_retry_overrides(
+            preset=preset,
+            num_bag_folds=num_bag_folds,
+            max_memory_ratio=max_memory_ratio,
+        )
+        logger.warning(
+            "%s 首次训练触发内存相关失败，启动自动降级重试: %s",
+            stage_name,
+            retry_overrides,
+        )
+        shutil.rmtree(output_path, ignore_errors=True)
+        retry_predictor = predictor_factory(max_memory_ratio=retry_overrides["max_memory_ratio"])
+        retry_predictor.train(
+            **train_kwargs,
+            presets=retry_overrides["preset"],
+            num_bag_folds=retry_overrides["num_bag_folds"] if retry_overrides["num_bag_folds"] > 0 else None,
+        )
+        return retry_predictor, {"retried": True, "overrides": retry_overrides}
 
 
 def _build_artifact_status(
@@ -423,6 +508,11 @@ def main():
     pipeline_mode = runtime_config.get("pipeline_mode", "single_stage")
     split_group_mode = runtime_config.get("split_group_mode", "phone_or_lead")
     feature_profile = runtime_config.get("feature_profile", "auto_scorecard")
+    enable_auto_degrade = runtime_config.get("enable_auto_degrade", True)
+    enable_prep_cache = runtime_config.get("enable_prep_cache", True)
+    force_rebuild_cache = runtime_config.get("force_rebuild_cache", False)
+    enable_retry_on_memory_error = runtime_config.get("enable_retry_on_memory_error", True)
+    data_path_obj = Path(data_path)
     
     # 日志设置
     if args.log_file:
@@ -470,7 +560,9 @@ def main():
         f"memory_limit_gb={memory_limit_gb}, "
         f"fit_strategy={fit_strategy}, "
         f"num_folds_parallel={num_folds_parallel}, "
-        f"excluded_model_types={excluded_model_types}"
+        f"excluded_model_types={excluded_model_types}, "
+        f"enable_auto_degrade={enable_auto_degrade}, "
+        f"enable_prep_cache={enable_prep_cache}"
     )
     detected_resources = runtime_config.get("detected_resources", {})
     resource_tuning = runtime_config.get("resource_tuning", {})
@@ -494,99 +586,154 @@ def main():
 
     # 1. 加载数据
     try:
-        logger.info("步骤 1/6: 加载数据")
-        # 统一开启 auto_adapt=True 以支持 2-3 月新 SQL 格式
-        loader = DataLoader(data_path, auto_adapt=True)
-        df = loader.load()
-        adaptation_metadata = loader.get_adaptation_metadata()
-        target_label = _resolve_target_label(df, target_label)
-
-        if target_label in df.columns:
-            df = df[df[target_label] != "Unknown"].copy()
-            logger.info(f"过滤 Unknown 后: {len(df):,} 行")
-
-        # 2. 智能数据切分
-        logger.info("步骤 2/6: 执行智能数据切分")
-        if args.train_end and args.valid_end:
-            logger.info(f"采用手动 OOT 切分: {args.train_end} / {args.valid_end}")
-            train_df, valid_df, test_df = split_data_oot_three_way(
-                df, target_label, "线索创建时间", args.train_end, args.valid_end
-            )
-            split_info = {"mode": "oot_manual", "train_end": args.train_end, "valid_end": args.valid_end}
-        else:
-            try:
-                train_df, valid_df, test_df, split_info = smart_split_data(
-                    df,
-                    target_label,
-                    split_mode="auto_oot" if split_mode == "auto_oot" else split_mode,
-                    auto_oot_min_days=auto_oot_min_days,
-                    group_by=split_group_mode,
-                )
-            except TypeError:
-                logger.warning("smart_split_data 不支持新切分参数，回退到兼容调用")
-                train_df, valid_df, test_df, split_info = smart_split_data(df, target_label)
-
-        # 防泄漏检查：验证测试集 ID 未泄露到训练集
-        if split_info.get("test_ids") and "线索唯一ID" in train_df.columns:
-            test_ids_set = set(split_info["test_ids"])
-            train_ids_set = set(train_df["线索唯一ID"].tolist())
-            leakage = test_ids_set & train_ids_set
-            if leakage:
-                raise ValueError(f"检测到测试集 ID 泄露到训练集: {len(leakage)} 个样本")
-            logger.info("防泄漏检查通过: 训练集与测试集无重叠")
-
-        label_policy = build_ohab_label_policy(
-            train_df,
+        excluded_columns = get_excluded_columns(target_label)
+        cache_root = config.output.output_dir / "cache" / "ohab"
+        cache_manager = PrepCacheManager(cache_root)
+        cache_key = build_prep_cache_key(
+            data_path=data_path_obj,
             target_label=target_label,
+            schema_version="v2",
+            split_mode=split_mode,
+            split_group_mode=split_group_mode,
             label_mode=label_mode,
-            o_merge_threshold=args.o_merge_threshold,
-            merge_target=args.o_merge_target,
+            feature_profile=feature_profile,
+            random_seed=config.data.random_seed,
+            excluded_columns_version=_excluded_columns_version(excluded_columns),
         )
-        logger.info(f"训练标签策略: {label_policy}")
+        cache_hit = False
+        cache_payload = None
 
-        train_df = apply_ohab_label_policy(train_df, target_label, label_policy)
-        valid_df = apply_ohab_label_policy(valid_df, target_label, label_policy)
-        test_df = apply_ohab_label_policy(test_df, target_label, label_policy)
-        train_df = filter_to_effective_ohab_labels(train_df, target_label, label_policy)
-        valid_df = filter_to_effective_ohab_labels(valid_df, target_label, label_policy)
-        test_df = filter_to_effective_ohab_labels(test_df, target_label, label_policy)
+        if enable_prep_cache and not force_rebuild_cache:
+            cache_payload = cache_manager.load(cache_key)
+            if cache_payload is not None:
+                cache_hit = True
+                train_df = cache_payload["train_df"]
+                valid_df = cache_payload["valid_df"]
+                test_df = cache_payload["test_df"]
+                cached_metadata = cache_payload["metadata"]
+                target_label = cached_metadata["target_label"]
+                split_info = cached_metadata["split_info"]
+                label_policy = cached_metadata["label_policy"]
+                screening_report = cached_metadata["screening_report"]
+                adaptation_metadata = cached_metadata["adaptation_metadata"]
+                feature_metadata = cached_metadata["feature_metadata"]
+                logger.info("步骤 1-3 命中预处理缓存: %s", cache_key)
 
-        train_df, screening_report = screen_features(train_df, target_label=target_label)
-        valid_df = apply_screening_report(valid_df, screening_report)
-        test_df = apply_screening_report(test_df, screening_report)
+        if not cache_hit:
+            logger.info("步骤 1/6: 加载数据")
+            loader = DataLoader(data_path, auto_adapt=True)
+            df = loader.load()
+            adaptation_metadata = loader.get_adaptation_metadata()
+            target_label = _resolve_target_label(df, target_label)
 
-        # 3. 特征工程（先 fit 训练集，再 transform 验证/测试集）
-        logger.info("步骤 3/6: 特征工程")
-        feature_engineer = FeatureEngineer(
-            time_columns=config.feature.time_columns,
-            numeric_columns=config.feature.numeric_features,
-        )
-        train_df, feature_metadata = feature_engineer.fit_transform(train_df)
-        valid_df, _ = feature_engineer.transform(
-            valid_df,
-            interaction_context=feature_metadata.get("interaction_context"),
-        )
-        test_df, _ = feature_engineer.transform(
-            test_df,
-            interaction_context=feature_metadata.get("interaction_context"),
-        )
+            if target_label in df.columns:
+                df = df[df[target_label] != "Unknown"].copy()
+                logger.info(f"过滤 Unknown 后: {len(df):,} 行")
 
-        feature_metadata["split_info"] = split_info
-        feature_metadata["label_policy"] = label_policy
-        feature_metadata["label_mode"] = label_mode
-        feature_metadata["schema_contract"] = adaptation_metadata.get("schema_contract", {})
-        feature_metadata["feature_names_version"] = "ohab_schema_contract_v2"
-        feature_metadata["screening_report"] = screening_report
-        feature_metadata["split_mode"] = split_mode
-        feature_metadata["split_group_mode"] = split_group_mode
-        feature_metadata["pipeline_mode"] = pipeline_mode
-        feature_metadata["feature_profile"] = feature_profile
-        if adaptation_metadata.get("json_feature_source"):
-            feature_metadata["json_feature_source"] = adaptation_metadata["json_feature_source"]
-        feature_metadata["artifact_status"] = _build_artifact_status(
-            training_complete=False,
-            comparison_expected=bool(enable_model_comparison),
-        )
+            logger.info("步骤 2/6: 执行智能数据切分")
+            if args.train_end and args.valid_end:
+                logger.info(f"采用手动 OOT 切分: {args.train_end} / {args.valid_end}")
+                train_df, valid_df, test_df = split_data_oot_three_way(
+                    df, target_label, "线索创建时间", args.train_end, args.valid_end
+                )
+                split_info = {"mode": "oot_manual", "train_end": args.train_end, "valid_end": args.valid_end}
+            else:
+                try:
+                    train_df, valid_df, test_df, split_info = smart_split_data(
+                        df,
+                        target_label,
+                        split_mode="auto_oot" if split_mode == "auto_oot" else split_mode,
+                        auto_oot_min_days=auto_oot_min_days,
+                        group_by=split_group_mode,
+                    )
+                except TypeError:
+                    logger.warning("smart_split_data 不支持新切分参数，回退到兼容调用")
+                    train_df, valid_df, test_df, split_info = smart_split_data(df, target_label)
+
+            if split_info.get("test_ids") and "线索唯一ID" in train_df.columns:
+                test_ids_set = set(split_info["test_ids"])
+                train_ids_set = set(train_df["线索唯一ID"].tolist())
+                leakage = test_ids_set & train_ids_set
+                if leakage:
+                    raise ValueError(f"检测到测试集 ID 泄露到训练集: {len(leakage)} 个样本")
+                logger.info("防泄漏检查通过: 训练集与测试集无重叠")
+
+            label_policy = build_ohab_label_policy(
+                train_df,
+                target_label=target_label,
+                label_mode=label_mode,
+                o_merge_threshold=args.o_merge_threshold,
+                merge_target=args.o_merge_target,
+            )
+            logger.info(f"训练标签策略: {label_policy}")
+
+            train_df = apply_ohab_label_policy(train_df, target_label, label_policy)
+            valid_df = apply_ohab_label_policy(valid_df, target_label, label_policy)
+            test_df = apply_ohab_label_policy(test_df, target_label, label_policy)
+            train_df = filter_to_effective_ohab_labels(train_df, target_label, label_policy)
+            valid_df = filter_to_effective_ohab_labels(valid_df, target_label, label_policy)
+            test_df = filter_to_effective_ohab_labels(test_df, target_label, label_policy)
+
+            train_df, screening_report = screen_features(train_df, target_label=target_label)
+            valid_df = apply_screening_report(valid_df, screening_report)
+            test_df = apply_screening_report(test_df, screening_report)
+
+            logger.info("步骤 3/6: 特征工程")
+            feature_engineer = FeatureEngineer(
+                time_columns=config.feature.time_columns,
+                numeric_columns=config.feature.numeric_features,
+            )
+            train_df, feature_metadata = feature_engineer.fit_transform(train_df)
+            valid_df, _ = feature_engineer.transform(
+                valid_df,
+                interaction_context=feature_metadata.get("interaction_context"),
+            )
+            test_df, _ = feature_engineer.transform(
+                test_df,
+                interaction_context=feature_metadata.get("interaction_context"),
+            )
+
+            feature_metadata["split_info"] = split_info
+            feature_metadata["label_policy"] = label_policy
+            feature_metadata["label_mode"] = label_mode
+            feature_metadata["schema_contract"] = adaptation_metadata.get("schema_contract", {})
+            feature_metadata["feature_names_version"] = "ohab_schema_contract_v2"
+            feature_metadata["screening_report"] = screening_report
+            feature_metadata["split_mode"] = split_mode
+            feature_metadata["split_group_mode"] = split_group_mode
+            feature_metadata["pipeline_mode"] = pipeline_mode
+            feature_metadata["feature_profile"] = feature_profile
+            if adaptation_metadata.get("json_feature_source"):
+                feature_metadata["json_feature_source"] = adaptation_metadata["json_feature_source"]
+            feature_metadata["artifact_status"] = _build_artifact_status(
+                training_complete=False,
+                comparison_expected=bool(enable_model_comparison),
+            )
+
+            if enable_prep_cache:
+                cache_manager.save(
+                    cache_key,
+                    {
+                        "train_df": train_df,
+                        "valid_df": valid_df,
+                        "test_df": test_df,
+                        "metadata": {
+                            "target_label": target_label,
+                            "split_info": split_info,
+                            "label_policy": label_policy,
+                            "screening_report": screening_report,
+                            "adaptation_metadata": adaptation_metadata,
+                            "feature_metadata": feature_metadata,
+                        },
+                    },
+                )
+                logger.info("步骤 1-3 预处理缓存已写入: %s", cache_key)
+
+        feature_metadata["cache_status"] = {
+            "enabled": enable_prep_cache,
+            "cache_key": cache_key,
+            "cache_hit": cache_hit,
+        }
 
         # 4. 训练模型
         logger.info("步骤 4/6: 模型训练")
@@ -594,6 +741,28 @@ def main():
         _dump_json(output_dir / "feature_metadata.json", feature_metadata)
 
         excluded_columns = get_excluded_columns(target_label)
+        candidate_feature_columns = [
+            col for col in train_df.columns if col not in set(excluded_columns) and col != target_label
+        ]
+        dataset_profile = {
+            "train_rows": len(train_df),
+            "feature_count": len(candidate_feature_columns),
+            "train_memory_mb": round(train_df.memory_usage(deep=True).sum() / 1024 / 1024, 2),
+            "text_feature_count": _estimate_text_feature_count(train_df, candidate_feature_columns),
+        }
+        resource_plan = build_resource_plan(runtime_config, dataset_profile)
+        if enable_auto_degrade and resource_plan["should_degrade"]:
+            logger.warning("训练资源计划触发自动降级: %s", resource_plan)
+            preset = resource_plan["effective_preset"]
+            num_bag_folds = resource_plan["effective_num_bag_folds"]
+            enable_model_comparison = resource_plan["effective_enable_model_comparison"]
+            max_memory_ratio = resource_plan["effective_max_memory_ratio"]
+        feature_metadata["resource_plan"] = resource_plan
+        feature_metadata["degradation_history"] = []
+        feature_metadata["artifact_status"] = _build_artifact_status(
+            training_complete=False,
+            comparison_expected=bool(enable_model_comparison),
+        )
         if excluded_model_types:
             logger.info(f"排除模型类型: {', '.join(excluded_model_types)}")
         comparison_config = {
@@ -628,55 +797,77 @@ def main():
 
             stage1_dir = output_dir / "stage1_h_vs_nonh"
             stage2_dir = output_dir / "stage2_a_vs_b"
-            stage1_predictor = LeadScoringPredictor(
-                label="stage1_label",
-                output_path=str(stage1_dir),
-                eval_metric=eval_metric,
-                problem_type="binary",
-                sample_weight="balance_weight",
-                max_memory_usage_ratio=max_memory_ratio,
-                memory_limit_gb=memory_limit_gb,
-                fit_strategy=fit_strategy,
-                excluded_model_types=excluded_model_types,
-                num_folds_parallel=num_folds_parallel,
-            )
-            stage2_predictor = LeadScoringPredictor(
-                label="stage2_label",
-                output_path=str(stage2_dir),
-                eval_metric=eval_metric,
-                problem_type="binary",
-                sample_weight="balance_weight",
-                max_memory_usage_ratio=max_memory_ratio,
-                memory_limit_gb=memory_limit_gb,
-                fit_strategy=fit_strategy,
-                excluded_model_types=excluded_model_types,
-                num_folds_parallel=num_folds_parallel,
-            )
 
             stage1_excluded = list(dict.fromkeys(excluded_columns + [target_label, "stage2_label"]))
             stage2_excluded = list(dict.fromkeys(excluded_columns + [target_label, "stage1_label"]))
 
             stage1_train_kwargs = {
                 "train_data": stage1_train,
-                "presets": preset,
                 "time_limit": time_limit,
                 "excluded_columns": stage1_excluded,
-                "num_bag_folds": num_bag_folds if num_bag_folds > 0 else None,
             }
             stage2_train_kwargs = {
                 "train_data": stage2_train,
-                "presets": preset,
                 "time_limit": time_limit,
                 "excluded_columns": stage2_excluded,
-                "num_bag_folds": num_bag_folds if num_bag_folds > 0 else None,
             }
             if len(stage1_valid) > 0:
                 stage1_train_kwargs["tuning_data"] = stage1_valid
             if len(stage2_valid) > 0:
                 stage2_train_kwargs["tuning_data"] = stage2_valid
 
-            stage1_predictor.train(**stage1_train_kwargs)
-            stage2_predictor.train(**stage2_train_kwargs)
+            def _make_stage1_predictor(max_memory_ratio):
+                return LeadScoringPredictor(
+                    label="stage1_label",
+                    output_path=str(stage1_dir),
+                    eval_metric=eval_metric,
+                    problem_type="binary",
+                    sample_weight="balance_weight",
+                    max_memory_usage_ratio=max_memory_ratio,
+                    memory_limit_gb=memory_limit_gb,
+                    fit_strategy=fit_strategy,
+                    excluded_model_types=excluded_model_types,
+                    num_folds_parallel=num_folds_parallel,
+                )
+
+            def _make_stage2_predictor(max_memory_ratio):
+                return LeadScoringPredictor(
+                    label="stage2_label",
+                    output_path=str(stage2_dir),
+                    eval_metric=eval_metric,
+                    problem_type="binary",
+                    sample_weight="balance_weight",
+                    max_memory_usage_ratio=max_memory_ratio,
+                    memory_limit_gb=memory_limit_gb,
+                    fit_strategy=fit_strategy,
+                    excluded_model_types=excluded_model_types,
+                    num_folds_parallel=num_folds_parallel,
+                )
+
+            stage1_predictor, stage1_retry = _train_with_retry(
+                predictor_factory=_make_stage1_predictor,
+                train_kwargs=stage1_train_kwargs,
+                output_path=stage1_dir,
+                stage_name="stage1_h_vs_nonh",
+                enable_retry_on_memory_error=enable_retry_on_memory_error,
+                preset=preset,
+                num_bag_folds=num_bag_folds,
+                max_memory_ratio=max_memory_ratio,
+            )
+            stage2_predictor, stage2_retry = _train_with_retry(
+                predictor_factory=_make_stage2_predictor,
+                train_kwargs=stage2_train_kwargs,
+                output_path=stage2_dir,
+                stage_name="stage2_a_vs_b",
+                enable_retry_on_memory_error=enable_retry_on_memory_error,
+                preset=preset,
+                num_bag_folds=num_bag_folds,
+                max_memory_ratio=max_memory_ratio,
+            )
+            if stage1_retry["retried"]:
+                feature_metadata["degradation_history"].append({"stage": "stage1", **stage1_retry["overrides"]})
+            if stage2_retry["retried"]:
+                feature_metadata["degradation_history"].append({"stage": "stage2", **stage2_retry["overrides"]})
 
             # 阈值优化：空验证集时使用默认阈值，避免使用测试集导致数据泄露
             if len(valid_df) == 0:
@@ -715,9 +906,87 @@ def main():
             if enable_model_comparison:
                 logger.info("训练 GBDT 单阶段基线模型用于对照评估")
                 baseline_dir = output_dir / "baseline_gbdt"
-                baseline_predictor = LeadScoringPredictor(
+                baseline_train_kwargs = {
+                    "train_data": train_df,
+                    "time_limit": time_limit,
+                    "excluded_columns": excluded_columns,
+                    "hyperparameters": {"GBM": {}},
+                }
+                if len(valid_df) > 0:
+                    baseline_train_kwargs["tuning_data"] = valid_df
+                def _make_baseline_predictor(max_memory_ratio):
+                    return LeadScoringPredictor(
+                        label=target_label,
+                        output_path=str(baseline_dir),
+                        eval_metric=eval_metric,
+                        problem_type="multiclass",
+                        sample_weight="balance_weight",
+                        max_memory_usage_ratio=max_memory_ratio,
+                        memory_limit_gb=memory_limit_gb,
+                        fit_strategy=fit_strategy,
+                        excluded_model_types=excluded_model_types,
+                        num_folds_parallel=num_folds_parallel,
+                    )
+
+                try:
+                    baseline_predictor, baseline_retry = _train_with_retry(
+                        predictor_factory=_make_baseline_predictor,
+                        train_kwargs=baseline_train_kwargs,
+                        output_path=baseline_dir,
+                        stage_name="baseline_gbdt",
+                        enable_retry_on_memory_error=enable_retry_on_memory_error,
+                        preset=preset,
+                        num_bag_folds=num_bag_folds,
+                        max_memory_ratio=max_memory_ratio,
+                    )
+                    if baseline_retry["retried"]:
+                        feature_metadata["degradation_history"].append({"stage": "baseline", **baseline_retry["overrides"]})
+                    baseline_model_name = baseline_predictor.get_model_info().get("best_model")
+                    if len(valid_df) > 0:
+                        baseline_decision_policy = _build_model_decision_policy(
+                            predictor=baseline_predictor,
+                            dataset=valid_df,
+                            target_label=target_label,
+                            label_mode=label_mode,
+                            model_name=baseline_model_name,
+                        )
+                    comparison_config = {
+                        "enabled": True,
+                        "baseline_family_requested": baseline_family,
+                        "best_model_name": best_model_name,
+                        "baseline_model_name": "gbdt_baseline",
+                        "models": {
+                            "two_stage_pipeline": {
+                                "role": "best",
+                                "decision_policy": decision_policy,
+                                "pipeline_mode": "two_stage",
+                            },
+                            "gbdt_baseline": {
+                                "role": "baseline",
+                                "model_dir": str(baseline_dir),
+                                "model_name": baseline_model_name,
+                                "decision_policy": baseline_decision_policy,
+                            },
+                        },
+                    }
+                    pipeline_metadata["baseline_model_dir"] = str(baseline_dir)
+                    pipeline_metadata["baseline_model_name"] = baseline_model_name
+                except Exception as exc:
+                    logger.warning("基线模型训练失败，已跳过 comparator: %s", exc)
+                    comparison_config["enabled"] = False
+        else:
+            train_kwargs = {
+                "train_data": train_df,
+                "time_limit": time_limit,
+                "excluded_columns": excluded_columns,
+            }
+            if len(valid_df) > 0:
+                train_kwargs["tuning_data"] = valid_df
+
+            def _make_single_stage_predictor(max_memory_ratio):
+                return LeadScoringPredictor(
                     label=target_label,
-                    output_path=str(baseline_dir),
+                    output_path=str(output_dir),
                     eval_metric=eval_metric,
                     problem_type="multiclass",
                     sample_weight="balance_weight",
@@ -727,72 +996,19 @@ def main():
                     excluded_model_types=excluded_model_types,
                     num_folds_parallel=num_folds_parallel,
                 )
-                baseline_train_kwargs = {
-                    "train_data": train_df,
-                    "presets": preset,
-                    "time_limit": time_limit,
-                    "excluded_columns": excluded_columns,
-                    "num_bag_folds": num_bag_folds if num_bag_folds > 0 else None,
-                    "hyperparameters": {"GBM": {}},
-                }
-                if len(valid_df) > 0:
-                    baseline_train_kwargs["tuning_data"] = valid_df
-                baseline_predictor.train(**baseline_train_kwargs)
-                baseline_model_name = baseline_predictor.get_model_info().get("best_model")
-                if len(valid_df) > 0:
-                    baseline_decision_policy = _build_model_decision_policy(
-                        predictor=baseline_predictor,
-                        dataset=valid_df,
-                        target_label=target_label,
-                        label_mode=label_mode,
-                        model_name=baseline_model_name,
-                    )
-                comparison_config = {
-                    "enabled": True,
-                    "baseline_family_requested": baseline_family,
-                    "best_model_name": best_model_name,
-                    "baseline_model_name": "gbdt_baseline",
-                    "models": {
-                        "two_stage_pipeline": {
-                            "role": "best",
-                            "decision_policy": decision_policy,
-                            "pipeline_mode": "two_stage",
-                        },
-                        "gbdt_baseline": {
-                            "role": "baseline",
-                            "model_dir": str(baseline_dir),
-                            "model_name": baseline_model_name,
-                            "decision_policy": baseline_decision_policy,
-                        },
-                    },
-                }
-                pipeline_metadata["baseline_model_dir"] = str(baseline_dir)
-                pipeline_metadata["baseline_model_name"] = baseline_model_name
-        else:
-            predictor = LeadScoringPredictor(
-                label=target_label,
-                output_path=str(output_dir),
-                eval_metric=eval_metric,
-                problem_type="multiclass",
-                sample_weight="balance_weight",
-                max_memory_usage_ratio=max_memory_ratio,
-                memory_limit_gb=memory_limit_gb,
-                fit_strategy=fit_strategy,
-                excluded_model_types=excluded_model_types,
-                num_folds_parallel=num_folds_parallel,
+
+            predictor, retry_result = _train_with_retry(
+                predictor_factory=_make_single_stage_predictor,
+                train_kwargs=train_kwargs,
+                output_path=output_dir,
+                stage_name="single_stage",
+                enable_retry_on_memory_error=enable_retry_on_memory_error,
+                preset=preset,
+                num_bag_folds=num_bag_folds,
+                max_memory_ratio=max_memory_ratio,
             )
-
-            train_kwargs = {
-                "train_data": train_df,
-                "presets": preset,
-                "time_limit": time_limit,
-                "excluded_columns": excluded_columns,
-                "num_bag_folds": num_bag_folds if num_bag_folds > 0 else None,
-            }
-            if len(valid_df) > 0:
-                train_kwargs["tuning_data"] = valid_df
-
-            predictor.train(**train_kwargs)
+            if retry_result["retried"]:
+                feature_metadata["degradation_history"].append({"stage": "single_stage", **retry_result["overrides"]})
             best_model_name = predictor.get_model_info().get("best_model")
             comparison_config = {
                 "enabled": False,

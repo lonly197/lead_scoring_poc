@@ -343,13 +343,21 @@ def load_and_adapt_data(
                 read_params["names"] = format_config.column_names[:actual_columns]
                 print(f"警告: 数据列数({actual_columns})少于定义列数({defined_columns})，已截断列名")
 
-        read_params["engine"] = "python"
-        read_params["on_bad_lines"] = "skip"
+        read_params["low_memory"] = False
     else:
         read_params["low_memory"] = False
 
     # 加载数据
-    df = pd.read_csv(file_path, **read_params)
+    try:
+        df = pd.read_csv(file_path, **read_params)
+    except Exception:
+        if format_config.header is None:
+            fallback_params = dict(read_params)
+            fallback_params["engine"] = "python"
+            fallback_params["on_bad_lines"] = "skip"
+            df = pd.read_csv(file_path, **fallback_params)
+        else:
+            raise
 
     # 验证关键列是否存在
     required_columns = ["线索创建时间", "线索唯一ID"]

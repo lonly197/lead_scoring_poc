@@ -9,7 +9,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List
 
-from dotenv import load_dotenv
+try:
+    from dotenv import load_dotenv
+except ModuleNotFoundError:  # pragma: no cover - 测试环境可不安装 python-dotenv
+    def load_dotenv(*args, **kwargs):
+        return False
 
 # 加载环境变量
 load_dotenv()
@@ -204,6 +208,8 @@ class FeatureConfig:
             # JSON 字段
             "跟进记录_JSON",
             "跟进详情_JSON",
+            "首触跟进记录",
+            "非首触跟进记录",
             # 其他目标变量
             "到店标签_7天",
             "到店标签_14天",

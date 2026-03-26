@@ -45,4 +45,8 @@ def test_smart_split_data_random_group_mode_keeps_phone_groups_disjoint():
     assert train_groups.isdisjoint(test_groups)
     assert valid_groups.isdisjoint(test_groups)
     assert split_info["split_group_mode"] == "phone_or_lead"
-    assert split_info["test_group_keys"]
+    assert split_info["group_counts"]["test"] > 0
+    assert "train_group_keys" not in split_info
+    assert "valid_group_keys" not in split_info
+    assert "test_group_keys" not in split_info
+    assert split_info["group_key_fingerprint"]

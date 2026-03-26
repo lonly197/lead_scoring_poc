@@ -269,6 +269,69 @@ def _derive_num_folds_parallel(
         return 1
 
 
+def build_resource_plan(
+    runtime_config: dict[str, Any],
+    dataset_profile: dict[str, Any],
+) -> dict[str, Any]:
+    """结合数据规模和资源情况生成训练执行计划。"""
+    available_memory_gb = (
+        runtime_config.get("detected_resources", {}) or {}
+    ).get("available_memory_gb")
+    train_rows = int(dataset_profile.get("train_rows") or 0)
+    feature_count = int(dataset_profile.get("feature_count") or 0)
+    train_memory_mb = float(dataset_profile.get("train_memory_mb") or 0.0)
+    text_feature_count = int(dataset_profile.get("text_feature_count") or 0)
+
+    reasons: list[str] = []
+    if text_feature_count > 0:
+        reasons.append("text_features_detected")
+    if (
+        runtime_config.get("pipeline_mode") == "two_stage"
+        and (runtime_config.get("num_bag_folds") or 0) >= 3
+        and train_rows >= 250_000
+        and available_memory_gb is not None
+        and available_memory_gb <= 12
+    ):
+        reasons.append("memory_risk_high")
+    if (
+        available_memory_gb is not None
+        and available_memory_gb <= 12
+        and train_memory_mb >= 350
+        and feature_count >= 50
+    ):
+        reasons.append("wide_frame_heavy")
+
+    should_degrade = bool(reasons)
+    effective_num_bag_folds = runtime_config.get("num_bag_folds")
+    effective_preset = runtime_config.get("preset")
+    effective_enable_model_comparison = runtime_config.get("enable_model_comparison")
+    effective_max_memory_ratio = runtime_config.get("max_memory_ratio")
+
+    if should_degrade:
+        if effective_num_bag_folds and effective_num_bag_folds > 0:
+            effective_num_bag_folds = 0
+        if effective_preset != "medium_quality":
+            effective_preset = "medium_quality"
+        effective_enable_model_comparison = False
+        if effective_max_memory_ratio is None or effective_max_memory_ratio < 0.85:
+            effective_max_memory_ratio = 0.85
+
+    return {
+        "should_degrade": should_degrade,
+        "reasons": reasons,
+        "effective_num_bag_folds": effective_num_bag_folds,
+        "effective_preset": effective_preset,
+        "effective_enable_model_comparison": effective_enable_model_comparison,
+        "effective_max_memory_ratio": effective_max_memory_ratio,
+        "dataset_profile": {
+            "train_rows": train_rows,
+            "feature_count": feature_count,
+            "train_memory_mb": train_memory_mb,
+            "text_feature_count": text_feature_count,
+        },
+    }
+
+
 def resolve_training_config(args) -> dict[str, Any]:
     profile_name = _coalesce(
         getattr(args, "training_profile", None),
@@ -437,6 +500,30 @@ def resolve_training_config(args) -> dict[str, Any]:
             _env("OHAB_FEATURE_PROFILE"),
             profile.get("feature_profile"),
             "auto_scorecard",
+        ),
+        "enable_auto_degrade": bool(
+            _coalesce(
+                _env_bool("OHAB_ENABLE_AUTO_DEGRADE"),
+                True,
+            )
+        ),
+        "enable_prep_cache": bool(
+            _coalesce(
+                _env_bool("OHAB_ENABLE_PREP_CACHE"),
+                True,
+            )
+        ),
+        "force_rebuild_cache": bool(
+            _coalesce(
+                _env_bool("OHAB_FORCE_REBUILD_CACHE"),
+                False,
+            )
+        ),
+        "enable_retry_on_memory_error": bool(
+            _coalesce(
+                _env_bool("OHAB_ENABLE_RETRY_ON_MEMORY_ERROR"),
+                True,
+            )
         ),
         "detected_resources": detected_resources,
         "resource_tuning": {

@@ -410,7 +410,7 @@ def test_train_passes_memory_and_ensemble_controls_with_autogluon_shape(monkeypa
     assert fake_predictor.fit_kwargs["fit_strategy"] == "sequential"
     assert fake_predictor.fit_kwargs["excluded_model_types"] == ["RF", "XT"]
     assert fake_predictor.fit_kwargs["ag_args_ensemble"] == {"num_folds_parallel": 1}
-    assert fake_predictor.fit_kwargs["ag_args_fit"] == {"max_memory_usage_ratio": 0.9}
+    assert fake_predictor.fit_kwargs["ag_args_fit"] == {"ag.max_memory_usage_ratio": 0.9}
 
 
 def test_train_injects_compatible_progress_callback(monkeypatch, tmp_path):

@@ -29,8 +29,12 @@ def load_train_ohab_script(
             numeric_features=[],
         ),
         output=types.SimpleNamespace(
+            output_dir=base_output_dir,
             models_dir=model_root,
             topk_dir=topk_root,
+        ),
+        data=types.SimpleNamespace(
+            random_seed=42,
         ),
     )
     config_module.get_excluded_columns = lambda target: []
@@ -199,6 +203,15 @@ def load_train_ohab_script(
     predictor_module.LeadScoringPredictor = DummyPredictor
 
     runtime_module = types.ModuleType("src.training.ohab_runtime")
+    runtime_module.build_resource_plan = lambda runtime_config, dataset_profile: {
+        "should_degrade": False,
+        "reasons": [],
+        "effective_num_bag_folds": runtime_config["num_bag_folds"],
+        "effective_preset": runtime_config["preset"],
+        "effective_enable_model_comparison": runtime_config["enable_model_comparison"],
+        "effective_max_memory_ratio": runtime_config["max_memory_ratio"],
+        "dataset_profile": dataset_profile,
+    }
     runtime_module.resolve_training_config = lambda args: {
         "training_profile": "server_16g_compare",
         "preset": "good_quality",
@@ -214,6 +227,10 @@ def load_train_ohab_script(
         "excluded_model_types": ["RF", "XT"],
         "num_folds_parallel": 1,
         "max_memory_ratio": 0.7,
+        "enable_auto_degrade": True,
+        "enable_prep_cache": False,
+        "force_rebuild_cache": False,
+        "enable_retry_on_memory_error": True,
         "detected_resources": {"cpu_count": 8, "available_memory_gb": 10.0},
         "resource_tuning": {
             "memory_limit_source": "auto",
@@ -244,6 +261,50 @@ def load_train_ohab_script(
     helpers_module.update_process_status = lambda *args, **kwargs: None
 
     topk_module = types.ModuleType("scripts.generate_topk")
+    hab_pipeline_module = types.ModuleType("src.training.hab_pipeline")
+    prep_cache_module = types.ModuleType("src.training.prep_cache")
+
+    hab_pipeline_module.prepare_stage1_labels = lambda df, target: pd.Series(
+        ["H" if value == "H" else "non_h" for value in df[target]],
+        index=df.index,
+    )
+    hab_pipeline_module.prepare_stage2_frame = lambda df, target: df.assign(
+        stage2_label=df[target].where(df[target].isin(["A", "B"]), "A")
+    )
+    hab_pipeline_module.tune_h_threshold = lambda **kwargs: {
+        "strategy": "two_stage_threshold",
+        "h_threshold": 0.5,
+        "metrics": {},
+    }
+    hab_pipeline_module.combine_stage_predictions = lambda **kwargs: (
+        pd.Series(["H"] * len(kwargs["stage2_ab_proba"]), name="预测标签"),
+        pd.DataFrame(
+            {
+                "H": [0.7] * len(kwargs["stage2_ab_proba"]),
+                "A": [0.2] * len(kwargs["stage2_ab_proba"]),
+                "B": [0.1] * len(kwargs["stage2_ab_proba"]),
+            }
+        ),
+    )
+    hab_pipeline_module.compute_pipeline_metrics = lambda y_true, y_pred: {
+        "accuracy": 0.5,
+        "balanced_accuracy": 0.4,
+        "macro_f1": 0.35,
+        "weighted_f1": 0.45,
+    }
+
+    class DummyPrepCacheManager:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def load(self, cache_key):
+            return None
+
+        def save(self, cache_key, payload):
+            return tmp_path / "cache" / cache_key
+
+    prep_cache_module.PrepCacheManager = DummyPrepCacheManager
+    prep_cache_module.build_prep_cache_key = lambda **kwargs: "dummy-cache-key"
 
     def _generate_topk_from_predictor(*args, **kwargs):
         if topk_calls is not None:
@@ -263,6 +324,8 @@ def load_train_ohab_script(
     monkeypatch.setitem(sys.modules, "src.evaluation.business_logic", business_logic_module)
     monkeypatch.setitem(sys.modules, "src.models.predictor", predictor_module)
     monkeypatch.setitem(sys.modules, "src.training.ohab_runtime", runtime_module)
+    monkeypatch.setitem(sys.modules, "src.training.hab_pipeline", hab_pipeline_module)
+    monkeypatch.setitem(sys.modules, "src.training.prep_cache", prep_cache_module)
     monkeypatch.setitem(sys.modules, "src.utils.visualization", visualization_module)
     monkeypatch.setitem(sys.modules, "src.utils.helpers", helpers_module)
     monkeypatch.setitem(sys.modules, "scripts.generate_topk", topk_module)
