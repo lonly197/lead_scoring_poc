@@ -38,8 +38,12 @@ uv run python scripts/generate_business_report.py
 
 **输出位置**：
 - 模型：`outputs/models/ohab_model/`
-- 验证：`outputs/validation/`
+- 验证：`outputs/validation/ohab_validation/`
 - 报告：`outputs/reports/hab_poc_report.md`
+
+**其他模型默认输出**：
+- 到店验证：`outputs/validation/arrive_validation/`
+- 试驾验证：`outputs/validation/test_drive_validation/`
 
 ---
 
@@ -66,6 +70,16 @@ uv run python scripts/generate_topk.py \
     --model-path ./outputs/models/ohab_model \
     --target-class H \
     --k 100 500 1000
+```
+
+### 验证其他模型
+
+```bash
+# 到店模型
+uv run python scripts/validate_model.py --model-type arrive
+
+# 试驾模型
+uv run python scripts/validate_model.py --model-type test_drive
 ```
 
 ---

@@ -93,3 +93,12 @@ def test_infer_arrive_model_type_from_path(monkeypatch):
     validate_script = load_arrive_validate_script(monkeypatch)
 
     assert validate_script.infer_model_type(Path("outputs/models/arrive_model")) == "arrive"
+
+
+def test_parse_args_uses_arrive_validation_subdir(monkeypatch):
+    validate_script = load_arrive_validate_script(monkeypatch)
+    monkeypatch.setattr(sys, "argv", ["validate_arrive_model.py"])
+
+    args = validate_script.parse_args()
+
+    assert args.output_dir == "outputs/validation/arrive_validation"

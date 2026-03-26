@@ -88,7 +88,7 @@ def parse_args():
     parser.add_argument("--model-path", type=str, default="outputs/models/test_drive_model", help="模型路径")
     parser.add_argument("--data-path", type=str, default=None, help="测试数据路径")
     parser.add_argument("--target", type=str, default="试驾标签_14天", help="目标变量名")
-    parser.add_argument("--output-dir", type=str, default="outputs/validation_test_drive", help="输出目录")
+    parser.add_argument("--output-dir", type=str, default="outputs/validation/test_drive_validation", help="输出目录")
     parser.add_argument("--report-topk", type=str, default="100,500,1000", help="Top-K 列表")
     parser.add_argument(
         "--generate-plots",

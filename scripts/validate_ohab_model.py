@@ -365,7 +365,7 @@ def parse_args():
     parser.add_argument(
         "--output-dir",
         type=str,
-        default="outputs/validation",
+        default="outputs/validation/ohab_validation",
         help="输出目录",
     )
     parser.add_argument(

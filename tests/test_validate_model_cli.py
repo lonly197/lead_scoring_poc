@@ -160,3 +160,100 @@ def test_resolve_validator_script_uses_test_drive_model_type(monkeypatch):
     )
 
     assert script_path.endswith("scripts/validate_test_drive_model.py")
+
+
+def test_validate_ohab_parse_args_uses_ohab_validation_subdir(monkeypatch):
+    helpers_module = types.ModuleType("src.utils.helpers")
+    helpers_module.complete_process_if_running = lambda *args, **kwargs: None
+    helpers_module.format_training_duration = lambda seconds: f"{seconds}s"
+    helpers_module.get_timestamp = lambda: "20260325_120000"
+    helpers_module.get_local_now = lambda: None
+    helpers_module.format_timestamp = lambda dt: "2026-03-25 12:00:00+0800"
+    helpers_module.save_process_info = lambda *args, **kwargs: None
+    helpers_module.setup_logging = lambda *args, **kwargs: None
+    helpers_module.update_process_status = lambda *args, **kwargs: None
+
+    config_module = types.ModuleType("config.config")
+    config_module.config = types.SimpleNamespace(data=types.SimpleNamespace(data_path="./data/demo.tsv"))
+    config_module.get_excluded_columns = lambda target: []
+
+    dummy_module_names = [
+        "pandas",
+        "autogluon",
+        "autogluon.tabular",
+        "src.data.feature_screening",
+        "src.data.label_policy",
+        "src.data.loader",
+        "src.evaluation.comparison",
+        "src.models.predictor",
+        "src.evaluation.scorecard",
+        "src.training.hab_pipeline",
+        "src.evaluation.business_logic",
+        "src.evaluation.ohab_metrics",
+    ]
+
+    monkeypatch.setitem(sys.modules, "src.utils.helpers", helpers_module)
+    monkeypatch.setitem(sys.modules, "config.config", config_module)
+    monkeypatch.setitem(sys.modules, "pandas", types.ModuleType("pandas"))
+    monkeypatch.setitem(sys.modules, "autogluon", types.ModuleType("autogluon"))
+    tabular_module = types.ModuleType("autogluon.tabular")
+    tabular_module.TabularPredictor = object
+    monkeypatch.setitem(sys.modules, "autogluon.tabular", tabular_module)
+
+    for name in dummy_module_names[3:]:
+        monkeypatch.setitem(sys.modules, name, types.ModuleType(name))
+
+    screen_module = sys.modules["src.data.feature_screening"]
+    screen_module.apply_post_feature_screening_report = lambda *args, **kwargs: None
+    screen_module.apply_raw_schema_report = lambda *args, **kwargs: None
+    screen_module.apply_screening_report = lambda *args, **kwargs: None
+
+    label_module = sys.modules["src.data.label_policy"]
+    label_module.apply_ohab_label_policy = lambda *args, **kwargs: None
+    label_module.filter_to_effective_ohab_labels = lambda *args, **kwargs: None
+
+    loader_module = sys.modules["src.data.loader"]
+    loader_module.DataLoader = object
+    loader_module.FeatureEngineer = object
+
+    comparison_module = sys.modules["src.evaluation.comparison"]
+    comparison_module.build_comparator_bundle = lambda *args, **kwargs: None
+
+    predictor_module = sys.modules["src.models.predictor"]
+    predictor_module.LeadScoringPredictor = object
+
+    scorecard_module = sys.modules["src.evaluation.scorecard"]
+    scorecard_module.build_trimmed_scorecard_probability_frame = lambda *args, **kwargs: None
+    scorecard_module.score_trimmed_hab_scorecard = lambda *args, **kwargs: None
+
+    pipeline_module = sys.modules["src.training.hab_pipeline"]
+    pipeline_module.combine_stage_predictions = lambda *args, **kwargs: None
+
+    business_module = sys.modules["src.evaluation.business_logic"]
+    business_module.build_bucket_summary_text = lambda *args, **kwargs: None
+    business_module.build_lead_action_record = lambda *args, **kwargs: None
+
+    metrics_module = sys.modules["src.evaluation.ohab_metrics"]
+    metrics_module.apply_hab_decision_policy = lambda *args, **kwargs: None
+    metrics_module.classification_report_dict = lambda *args, **kwargs: None
+    metrics_module.classification_report_text = lambda *args, **kwargs: None
+    metrics_module.compute_hab_bucket_summary = lambda *args, **kwargs: None
+    metrics_module.compute_class_ranking_report = lambda *args, **kwargs: None
+    metrics_module.compute_threshold_report = lambda *args, **kwargs: None
+    metrics_module.confusion_matrix_frame = lambda *args, **kwargs: None
+    metrics_module.check_hab_monotonicity = lambda *args, **kwargs: None
+
+    module_name = "scripts.validate_ohab_model"
+    script_path = Path(__file__).resolve().parents[1] / "scripts" / "validate_ohab_model.py"
+    sys.modules.pop(module_name, None)
+    spec = importlib.util.spec_from_file_location(module_name, script_path)
+    module = importlib.util.module_from_spec(spec)
+    assert spec is not None and spec.loader is not None
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+
+    monkeypatch.setattr(sys, "argv", ["validate_ohab_model.py"])
+
+    args = module.parse_args()
+
+    assert args.output_dir == "outputs/validation/ohab_validation"
