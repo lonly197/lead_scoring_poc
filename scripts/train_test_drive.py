@@ -232,7 +232,9 @@ def main():
             eval_metric="roc_auc",
             problem_type="binary",
             sample_weight="balance_weight",  # 自动平衡类别权重
-            weight_evaluation=True,
+            # weight_evaluation 设为 False 以兼容 AutoGluon 动态堆叠
+            # 样本权重已在训练时生效，评估时无需额外权重
+            weight_evaluation=False,
             max_memory_usage_ratio=args.max_memory_ratio,
             excluded_model_types=excluded_model_types,
             num_folds_parallel=args.num_folds_parallel,
