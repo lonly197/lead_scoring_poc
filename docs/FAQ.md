@@ -81,7 +81,7 @@ DATA_PATH=/path/to/your_data.csv
 | `到店标签_30天` | `到店时间 - 线索创建时间 <= 30天` |
 | `试驾标签_14天` | `试驾时间 - 线索创建时间 <= 14天` |
 | `试驾标签_30天` | `试驾时间 - 线索创建时间 <= 30天` |
-| `线索评级_试驾前` | 直接使用 `线索评级结果` 列 |
+| `线索评级结果` | 直接使用 SQL 原始评级列 |
 | `成交标签` | `下订时间 IS NOT NULL` |
 
 **验证数据质量**：
@@ -95,7 +95,7 @@ df = loader.load()
 # 检查目标变量
 print(f"到店率 (14天): {df['到店标签_14天'].mean()*100:.2f}%")
 print(f"试驾率 (14天): {df['试驾标签_14天'].mean()*100:.2f}%")
-print(f"OHAB分布: {df['线索评级_试驾前'].value_counts().to_dict()}")
+print(f"OHAB分布: {df['线索评级结果'].value_counts().to_dict()}")
 ```
 
 ---
@@ -126,7 +126,7 @@ print(f"OHAB分布: {df['线索评级_试驾前'].value_counts().to_dict()}")
 ```python
 # 在训练脚本中已自动配置
 predictor = LeadScoringPredictor(
-    label="线索评级_试驾前",
+    label="线索评级结果",
     sample_weight="balance_weight",  # 自动平衡 H/A/B 权重
     weight_evaluation=True,
 )
