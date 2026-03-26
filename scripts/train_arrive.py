@@ -27,7 +27,6 @@ from src.data.loader import DataLoader, FeatureEngineer, smart_split_data, split
 from src.evaluation.metrics import (
     ModelReport,
     TopKEvaluator,
-    compute_topk_metrics,
     plot_feature_importance,
     plot_lift_chart,
 )
