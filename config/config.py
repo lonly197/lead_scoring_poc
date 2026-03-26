@@ -15,6 +15,22 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
+def _optional_env_float(key: str) -> float | None:
+    """获取可选的浮点数环境变量，空值返回 None。"""
+    value = os.getenv(key)
+    if value is None or value.strip() == "":
+        return None
+    return float(value)
+
+
+def _optional_env_int(key: str) -> int | None:
+    """获取可选的整数环境变量，空值返回 None。"""
+    value = os.getenv(key)
+    if value is None or value.strip() == "":
+        return None
+    return int(value)
+
+
 @dataclass
 class DataConfig:
     """数据配置"""
@@ -99,8 +115,8 @@ class OHABConfig:
     baseline_family: str = field(
         default_factory=lambda: os.getenv("OHAB_BASELINE_FAMILY", "gbm")
     )
-    memory_limit_gb: str = field(
-        default_factory=lambda: os.getenv("OHAB_MEMORY_LIMIT_GB", "")
+    memory_limit_gb: float | None = field(
+        default_factory=lambda: _optional_env_float("OHAB_MEMORY_LIMIT_GB")
     )
     fit_strategy: str = field(
         default_factory=lambda: os.getenv("OHAB_FIT_STRATEGY", "sequential")
@@ -108,11 +124,11 @@ class OHABConfig:
     excluded_model_types: str = field(
         default_factory=lambda: os.getenv("OHAB_EXCLUDED_MODEL_TYPES", "RF,XT,KNN,FASTAI,NN_TORCH")
     )
-    num_folds_parallel: str = field(
-        default_factory=lambda: os.getenv("OHAB_NUM_FOLDS_PARALLEL", "1")
+    num_folds_parallel: int = field(
+        default_factory=lambda: int(os.getenv("OHAB_NUM_FOLDS_PARALLEL", "1"))
     )
-    max_memory_ratio: str = field(
-        default_factory=lambda: os.getenv("OHAB_MAX_MEMORY_RATIO", "0.7")
+    max_memory_ratio: float = field(
+        default_factory=lambda: float(os.getenv("OHAB_MAX_MEMORY_RATIO", "0.7"))
     )
     generate_plots: bool = field(
         default_factory=lambda: os.getenv("OHAB_GENERATE_PLOTS", "false").lower() in {"1", "true", "yes", "y", "on"}

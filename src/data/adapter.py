@@ -14,8 +14,12 @@
 
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
+import logging
+import os
 import pandas as pd
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -287,6 +291,16 @@ def load_and_adapt_data(
     Returns:
         适配后的数据框
     """
+    # 文件路径验证
+    if not file_path or not file_path.strip():
+        raise ValueError("数据文件路径不能为空")
+
+    if not os.path.exists(file_path):
+        raise FileNotFoundError(f"数据文件不存在: {file_path}")
+
+    if not os.path.isfile(file_path):
+        raise ValueError(f"路径不是有效文件: {file_path}")
+
     # 自动检测格式
     if format_config is None:
         format_config = detect_data_format(file_path)
@@ -355,9 +369,15 @@ def load_and_adapt_data(
     }
 
     if "跟进详情_JSON" in df.columns:
-        df = batch_extract_json_features(df, "跟进详情_JSON", drop_original=False)
-        print("JSON 特征提取完成")
-        adaptation_metadata["json_feature_source"] = "跟进详情_JSON"
+        try:
+            df = batch_extract_json_features(df, "跟进详情_JSON", drop_original=False)
+            print("JSON 特征提取完成")
+            adaptation_metadata["json_feature_source"] = "跟进详情_JSON"
+            adaptation_metadata["json_extraction_status"] = "success"
+        except Exception as e:
+            logger.warning(f"JSON 特征提取失败: {e}")
+            adaptation_metadata["json_extraction_status"] = "failed"
+            adaptation_metadata["json_extraction_error"] = str(e)
 
     if return_metadata:
         return df, adaptation_metadata

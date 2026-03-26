@@ -59,6 +59,12 @@ def _balanced_accuracy(y_true: pd.Series, y_pred: pd.Series) -> float:
     return float(np.mean(recalls)) if recalls else 0.0
 
 
+def _weighted_f1(y_true: pd.Series, y_pred: pd.Series) -> float:
+    """计算 weighted F1 分数，按各类别样本数加权平均。"""
+    from sklearn.metrics import f1_score
+    return float(f1_score(y_true.astype(str), y_pred.astype(str), average="weighted", zero_division=0))
+
+
 def combine_stage_predictions(
     stage1_h_proba: pd.Series,
     stage2_ab_proba: pd.DataFrame,
@@ -138,7 +144,7 @@ def compute_pipeline_metrics(y_true: pd.Series, y_pred: pd.Series) -> dict:
         "accuracy": accuracy,
         "balanced_accuracy": _balanced_accuracy(true_values, pred_values),
         "macro_f1": _macro_f1(true_values, pred_values),
-        "weighted_f1": _macro_f1(true_values, pred_values),
+        "weighted_f1": _weighted_f1(true_values, pred_values),
         "mcc": 0.0,
     }
 

@@ -70,6 +70,20 @@ logger = logging.getLogger(__name__)
 TASK_NAME = "train_ohab"
 
 
+def _resolve_target_label(df: pd.DataFrame, requested_target: str) -> str:
+    if requested_target in df.columns:
+        return requested_target
+    alias_candidates = {
+        "线索评级结果": ["线索评级_试驾前"],
+        "线索评级_试驾前": ["线索评级结果"],
+    }
+    for alias in alias_candidates.get(requested_target, []):
+        if alias in df.columns:
+            logger.warning("目标列 %s 不存在，自动回退到兼容列 %s", requested_target, alias)
+            return alias
+    return requested_target
+
+
 def _parse_report_topk(raw_value: str) -> tuple[float, ...]:
     values = []
     for item in raw_value.split(","):
@@ -188,7 +202,7 @@ def parse_args():
     parser.add_argument(
         "--target",
         type=str,
-        default="线索评级_试驾前",
+        default="线索评级结果",
         help="目标变量名",
     )
     parser.add_argument(
@@ -485,6 +499,7 @@ def main():
         loader = DataLoader(data_path, auto_adapt=True)
         df = loader.load()
         adaptation_metadata = loader.get_adaptation_metadata()
+        target_label = _resolve_target_label(df, target_label)
 
         if target_label in df.columns:
             df = df[df[target_label] != "Unknown"].copy()
@@ -510,6 +525,15 @@ def main():
             except TypeError:
                 logger.warning("smart_split_data 不支持新切分参数，回退到兼容调用")
                 train_df, valid_df, test_df, split_info = smart_split_data(df, target_label)
+
+        # 防泄漏检查：验证测试集 ID 未泄露到训练集
+        if split_info.get("test_ids") and "线索唯一ID" in train_df.columns:
+            test_ids_set = set(split_info["test_ids"])
+            train_ids_set = set(train_df["线索唯一ID"].tolist())
+            leakage = test_ids_set & train_ids_set
+            if leakage:
+                raise ValueError(f"检测到测试集 ID 泄露到训练集: {len(leakage)} 个样本")
+            logger.info("防泄漏检查通过: 训练集与测试集无重叠")
 
         label_policy = build_ohab_label_policy(
             train_df,
@@ -654,14 +678,19 @@ def main():
             stage1_predictor.train(**stage1_train_kwargs)
             stage2_predictor.train(**stage2_train_kwargs)
 
-            stage1_valid_proba = stage1_predictor.predict_proba(valid_df if len(valid_df) > 0 else test_df)
-            stage2_valid_proba = stage2_predictor.predict_proba(valid_df if len(valid_df) > 0 else test_df)
-            decision_policy = tune_h_threshold(
-                y_true=(valid_df if len(valid_df) > 0 else test_df)[target_label].reset_index(drop=True),
-                stage1_h_proba=_select_probability_column(stage1_valid_proba.reset_index(drop=True), "H"),
-                stage2_ab_proba=stage2_valid_proba.reset_index(drop=True),
-                thresholds=(0.35, 0.4, 0.45, 0.5, 0.55, 0.6, 0.65),
-            )
+            # 阈值优化：空验证集时使用默认阈值，避免使用测试集导致数据泄露
+            if len(valid_df) == 0:
+                logger.warning("验证集为空，跳过阈值优化，使用默认 h_threshold=0.5")
+                decision_policy = {"strategy": "two_stage_threshold", "h_threshold": 0.5, "metrics": {}}
+            else:
+                stage1_valid_proba = stage1_predictor.predict_proba(valid_df)
+                stage2_valid_proba = stage2_predictor.predict_proba(valid_df)
+                decision_policy = tune_h_threshold(
+                    y_true=valid_df[target_label].reset_index(drop=True),
+                    stage1_h_proba=_select_probability_column(stage1_valid_proba.reset_index(drop=True), "H"),
+                    stage2_ab_proba=stage2_valid_proba.reset_index(drop=True),
+                    thresholds=(0.35, 0.4, 0.45, 0.5, 0.55, 0.6, 0.65),
+                )
 
             stage1_test_proba = stage1_predictor.predict_proba(test_df).reset_index(drop=True)
             stage2_test_proba = stage2_predictor.predict_proba(test_df).reset_index(drop=True)

@@ -117,6 +117,20 @@ ROLE_DISPLAY = {
 }
 
 
+def _resolve_target_label(df: pd.DataFrame, requested_target: str) -> str:
+    if requested_target in df.columns:
+        return requested_target
+    alias_candidates = {
+        "线索评级结果": ["线索评级_试驾前"],
+        "线索评级_试驾前": ["线索评级结果"],
+    }
+    for alias in alias_candidates.get(requested_target, []):
+        if alias in df.columns:
+            logger.warning("目标列 %s 不存在，自动回退到兼容列 %s", requested_target, alias)
+            return alias
+    return requested_target
+
+
 def _safe_float(value: object) -> float:
     try:
         if pd.isna(value):
@@ -341,7 +355,7 @@ def parse_args():
     parser.add_argument(
         "--target",
         type=str,
-        default="线索评级_试驾前",
+        default="线索评级结果",
         help="目标变量名",
     )
     parser.add_argument(
@@ -594,7 +608,7 @@ def main():
         df = loader.load()
 
         # 过滤 Unknown
-        target = args.target if pipeline_mode == "two_stage" else predictor.label
+        target = _resolve_target_label(df, args.target if pipeline_mode == "two_stage" else predictor.label)
         if target in df.columns:
             df = df[df[target] != "Unknown"].copy()
             logger.info(f"过滤 Unknown 后: {len(df)} 行")
