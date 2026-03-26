@@ -460,3 +460,40 @@ def test_train_ohab_two_stage_persists_gbdt_baseline_metadata(monkeypatch, tmp_p
     assert comparison_config["enabled"] is True
     assert comparison_config["models"]["two_stage_pipeline"]["role"] == "best"
     assert comparison_config["models"]["gbdt_baseline"]["role"] == "baseline"
+
+
+def test_train_ohab_comparator_only_baseline_forces_single_stage(monkeypatch, tmp_path):
+    train_ohab, _ = load_train_ohab_script(
+        monkeypatch,
+        tmp_path,
+        feature_importance_error=False,
+        runtime_overrides={
+            "pipeline_mode": "two_stage",
+            "enable_model_comparison": True,
+            "baseline_family": "gbm",
+        },
+    )
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "train_ohab.py",
+            "--data-path",
+            "./data/202602~03.tsv",
+            "--output-dir",
+            str(tmp_path / "outputs" / "models" / "baseline_reference"),
+            "--comparator-only",
+            "baseline_gbdt",
+        ],
+    )
+
+    train_ohab.main()
+
+    model_dir = tmp_path / "outputs" / "models" / "baseline_reference" / "ohab_model"
+    pipeline_metadata = json.loads((model_dir / "pipeline_metadata.json").read_text(encoding="utf-8"))
+    comparison_config = json.loads((model_dir / "model_comparison_config.json").read_text(encoding="utf-8"))
+
+    assert pipeline_metadata["pipeline_mode"] == "single_stage"
+    assert pipeline_metadata["comparator_only"] == "baseline_gbdt"
+    assert comparison_config["enabled"] is False

@@ -238,3 +238,21 @@ def test_compute_business_kpis_returns_lift_capture_and_client_message(monkeypat
     assert kpis["ha_drive_capture"] == pytest.approx(1.0)
     assert kpis["b_bucket_share"] == pytest.approx(0.25)
     assert kpis["client_layering_message"] == "已形成初步分层效果，H/A 边界仍需二期优化"
+
+
+def test_validate_ohab_parse_args_accepts_external_baseline_model_path(monkeypatch):
+    validate_script = load_validate_script(monkeypatch)
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "validate_ohab_model.py",
+            "--baseline-model-path",
+            "outputs/models/gbdt_reference/ohab_model",
+        ],
+    )
+
+    args = validate_script.parse_args()
+
+    assert args.baseline_model_path == "outputs/models/gbdt_reference/ohab_model"

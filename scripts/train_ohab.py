@@ -481,6 +481,13 @@ def parse_args():
         choices=["auto_scorecard"],
         help="特征筛选方案",
     )
+    parser.add_argument(
+        "--comparator-only",
+        type=str,
+        default=None,
+        choices=["baseline_gbdt"],
+        help="只训练指定对照模型，不训练默认主模型",
+    )
 
     return parser.parse_args()
 
@@ -517,6 +524,7 @@ def main():
     enable_prep_cache = runtime_config.get("enable_prep_cache", True)
     force_rebuild_cache = runtime_config.get("force_rebuild_cache", False)
     enable_retry_on_memory_error = runtime_config.get("enable_retry_on_memory_error", True)
+    comparator_only = args.comparator_only
     data_path_obj = Path(data_path)
     
     # 日志设置
@@ -551,6 +559,8 @@ def main():
     logger.info(f"训练开始时间: {train_start_time.strftime('%Y-%m-%d %H:%M:%S%z')}")
     logger.info(f"数据路径: {data_path}")
     logger.info(f"目标变量: {target_label}")
+    if comparator_only:
+        logger.info(f"训练模式: comparator_only={comparator_only}")
     logger.info(
         "有效训练配置: "
         f"profile={runtime_config['training_profile']}, "
@@ -813,6 +823,15 @@ def main():
             "split_group_mode": split_group_mode,
             "feature_profile": feature_profile,
         }
+        if comparator_only:
+            pipeline_metadata["comparator_only"] = comparator_only
+            feature_metadata["comparator_only"] = comparator_only
+            if comparator_only == "baseline_gbdt":
+                pipeline_mode = "single_stage"
+                pipeline_metadata["pipeline_mode"] = "single_stage"
+                enable_model_comparison = False
+                baseline_family = "gbm"
+                logger.info("已切换为 baseline-only 训练模式: 仅训练 baseline_gbdt")
 
         if pipeline_mode == "two_stage":
             logger.info("启用两阶段 HAB 流水线训练")
@@ -1015,6 +1034,8 @@ def main():
                 "time_limit": time_limit,
                 "excluded_columns": excluded_columns,
             }
+            if comparator_only == "baseline_gbdt":
+                train_kwargs["hyperparameters"] = {"GBM": {}}
             if len(valid_df) > 0:
                 train_kwargs["tuning_data"] = valid_df
 
@@ -1250,6 +1271,8 @@ def main():
                 )
             else:
                 predictor.cleanup(keep_best_only=True)
+            if comparator_only:
+                _dump_json(output_dir / "pipeline_metadata.json", pipeline_metadata)
 
         core_completed_at = get_local_now()
         feature_metadata["artifact_status"] = _build_artifact_status(

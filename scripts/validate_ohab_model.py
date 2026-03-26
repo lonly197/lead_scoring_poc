@@ -74,6 +74,14 @@ def load_feature_metadata(model_path: Path) -> dict:
     return {}
 
 
+def load_optional_baseline_predictor(model_path: Path) -> tuple[LeadScoringPredictor, str | None, dict]:
+    baseline_predictor = LeadScoringPredictor.load(str(model_path))
+    baseline_metadata = load_feature_metadata(model_path)
+    baseline_model_name = baseline_predictor.get_model_info().get("best_model")
+    baseline_policy = baseline_metadata.get("decision_policy", {"strategy": "argmax"})
+    return baseline_predictor, baseline_model_name, baseline_policy
+
+
 def validate_model_artifacts(metadata: dict, model_path: Path) -> None:
     """校验模型目录是否为统一训练入口产出的完整模型。"""
     artifact_status = metadata.get("artifact_status")
@@ -369,6 +377,12 @@ def parse_args():
         help="输出目录",
     )
     parser.add_argument(
+        "--baseline-model-path",
+        type=str,
+        default=None,
+        help="外部 baseline 模型路径；用于在现有 two-stage 主模型评估时补充三方对比",
+    )
+    parser.add_argument(
         "--oot-test",
         action="store_true",
         help="仅评估 OOT 测试集（时间 >= valid_end），避免数据泄露",
@@ -594,6 +608,11 @@ def main():
             baseline_policy = baseline_cfg.get("decision_policy", {"strategy": "argmax"})
             if baseline_model_dir:
                 baseline_predictor = LeadScoringPredictor.load(baseline_model_dir)
+            if args.baseline_model_path:
+                baseline_predictor, baseline_model_name, baseline_policy = load_optional_baseline_predictor(
+                    Path(args.baseline_model_path)
+                )
+                logger.info("已加载外部 baseline 模型: %s", args.baseline_model_path)
             logger.info(f"两阶段模型加载完成: {model_path}")
         else:
             predictor = load_model(model_path)
