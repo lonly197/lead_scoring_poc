@@ -27,7 +27,12 @@ project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
 from config.config import config, get_excluded_columns
-from src.data.feature_screening import apply_screening_report, screen_features
+from src.data.feature_screening import (
+    apply_post_feature_screening_report,
+    apply_raw_schema_report,
+    clean_raw_schema,
+    screen_post_feature_candidates,
+)
 from src.data.loader import DataLoader, FeatureEngineer, smart_split_data, split_data_oot_three_way
 from src.data.label_policy import (
     apply_ohab_label_policy,
@@ -599,6 +604,7 @@ def main():
             feature_profile=feature_profile,
             random_seed=config.data.random_seed,
             excluded_columns_version=_excluded_columns_version(excluded_columns),
+            feature_pipeline_version="v3",
         )
         cache_hit = False
         cache_payload = None
@@ -614,7 +620,12 @@ def main():
                 target_label = cached_metadata["target_label"]
                 split_info = cached_metadata["split_info"]
                 label_policy = cached_metadata["label_policy"]
-                screening_report = cached_metadata["screening_report"]
+                raw_schema_report = cached_metadata.get("raw_schema_report") or {}
+                post_feature_screening_report = cached_metadata.get("post_feature_screening_report") or {}
+                screening_report = cached_metadata.get("screening_report") or {
+                    "raw_schema_report": raw_schema_report,
+                    "post_feature_screening_report": post_feature_screening_report,
+                }
                 adaptation_metadata = cached_metadata["adaptation_metadata"]
                 feature_metadata = cached_metadata["feature_metadata"]
                 logger.info("步骤 1-3 命中预处理缓存: %s", cache_key)
@@ -674,9 +685,9 @@ def main():
             valid_df = filter_to_effective_ohab_labels(valid_df, target_label, label_policy)
             test_df = filter_to_effective_ohab_labels(test_df, target_label, label_policy)
 
-            train_df, screening_report = screen_features(train_df, target_label=target_label)
-            valid_df = apply_screening_report(valid_df, screening_report)
-            test_df = apply_screening_report(test_df, screening_report)
+            train_df, raw_schema_report = clean_raw_schema(train_df, target_label=target_label)
+            valid_df = apply_raw_schema_report(valid_df, raw_schema_report)
+            test_df = apply_raw_schema_report(test_df, raw_schema_report)
 
             logger.info("步骤 3/6: 特征工程")
             feature_engineer = FeatureEngineer(
@@ -693,16 +704,38 @@ def main():
                 interaction_context=feature_metadata.get("interaction_context"),
             )
 
+            train_df, post_feature_screening_report = screen_post_feature_candidates(
+                train_df,
+                target_label=target_label,
+            )
+            valid_df = apply_post_feature_screening_report(valid_df, post_feature_screening_report)
+            test_df = apply_post_feature_screening_report(test_df, post_feature_screening_report)
+
+            screening_report = {
+                "raw_schema_report": raw_schema_report,
+                "post_feature_screening_report": post_feature_screening_report,
+                "dropped_high_missing": sorted(
+                    set(raw_schema_report.get("dropped_high_missing", []))
+                    | set(post_feature_screening_report.get("dropped_high_missing", []))
+                ),
+                "dropped_constant": post_feature_screening_report.get("dropped_constant", []),
+                "dropped_weak_semantic": raw_schema_report.get("dropped_weak_semantic", []),
+                "added_missing_indicators": raw_schema_report.get("added_missing_indicators", []),
+            }
+
             feature_metadata["split_info"] = split_info
             feature_metadata["label_policy"] = label_policy
             feature_metadata["label_mode"] = label_mode
             feature_metadata["schema_contract"] = adaptation_metadata.get("schema_contract", {})
             feature_metadata["feature_names_version"] = "ohab_schema_contract_v2"
+            feature_metadata["raw_schema_report"] = raw_schema_report
+            feature_metadata["post_feature_screening_report"] = post_feature_screening_report
             feature_metadata["screening_report"] = screening_report
             feature_metadata["split_mode"] = split_mode
             feature_metadata["split_group_mode"] = split_group_mode
             feature_metadata["pipeline_mode"] = pipeline_mode
             feature_metadata["feature_profile"] = feature_profile
+            feature_metadata["pipeline_contract_version"] = 3
             if adaptation_metadata.get("json_feature_source"):
                 feature_metadata["json_feature_source"] = adaptation_metadata["json_feature_source"]
             feature_metadata["artifact_status"] = _build_artifact_status(
@@ -721,6 +754,8 @@ def main():
                             "target_label": target_label,
                             "split_info": split_info,
                             "label_policy": label_policy,
+                            "raw_schema_report": raw_schema_report,
+                            "post_feature_screening_report": post_feature_screening_report,
                             "screening_report": screening_report,
                             "adaptation_metadata": adaptation_metadata,
                             "feature_metadata": feature_metadata,

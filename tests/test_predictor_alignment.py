@@ -52,6 +52,7 @@ class FakeTabularPredictor:
         self.fit_train_columns = None
         self.fit_tuning_columns = None
         self.fit_kwargs = None
+        self.features_return = ["feat_a", "feat_b"]
         FakeTabularPredictor.last_instance = self
 
     def fit(self, train_data, **kwargs):
@@ -137,6 +138,9 @@ class FakeTabularPredictor:
     def save_space(self):
         return None
 
+    def features(self, feature_stage="original"):
+        return list(self.features_return)
+
     @classmethod
     def load(
         cls,
@@ -192,8 +196,9 @@ def test_train_aligns_tuning_data_to_training_feature_set(monkeypatch, tmp_path)
 
     fake_predictor = FakeTabularPredictor.last_instance
     assert predictor._feature_columns == ["feat_a", "feat_b"]
-    assert fake_predictor.fit_train_columns == ["feat_a", "feat_b", "label"]
-    assert fake_predictor.fit_tuning_columns == ["feat_a", "feat_b", "label"]
+    assert fake_predictor.fit_train_columns == ["feat_a", "feat_b", "leak_col", "label"]
+    assert fake_predictor.fit_tuning_columns == ["feat_a", "feat_b", "leak_col", "label"]
+    assert fake_predictor.init_kwargs["learner_kwargs"] == {"ignored_columns": ["leak_col"]}
     assert fake_predictor.fit_kwargs["use_bag_holdout"] is True
 
 
@@ -258,7 +263,7 @@ def test_load_restores_feature_columns_and_aligns_predict_proba(monkeypatch, tmp
     predictor.save(str(model_dir))
 
     metadata = json.loads((model_dir / "predictor_metadata.json").read_text(encoding="utf-8"))
-    assert metadata["feature_columns"] == ["feat_a", "feat_b"]
+    assert "feature_columns" not in metadata
     assert not (model_dir / "metadata.json").exists()
 
     FakeTabularPredictor.load_return = FakeTabularPredictor(
@@ -267,6 +272,7 @@ def test_load_restores_feature_columns_and_aligns_predict_proba(monkeypatch, tmp
         problem_type="binary",
         path=str(model_dir),
     )
+    FakeTabularPredictor.load_return.features_return = ["feat_a", "feat_b"]
 
     loaded_predictor = LeadScoringPredictor.load(str(model_dir))
     loaded_predictor.predict_proba(

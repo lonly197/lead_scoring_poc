@@ -20,6 +20,7 @@ def test_build_prep_cache_key_changes_when_inputs_change(tmp_path: Path):
         feature_profile="auto_scorecard",
         random_seed=42,
         excluded_columns_version="v1",
+        feature_pipeline_version="v3",
     )
     key2 = build_prep_cache_key(
         data_path=data_path,
@@ -31,6 +32,39 @@ def test_build_prep_cache_key_changes_when_inputs_change(tmp_path: Path):
         feature_profile="auto_scorecard",
         random_seed=43,
         excluded_columns_version="v1",
+        feature_pipeline_version="v3",
+    )
+
+    assert key1 != key2
+
+
+def test_build_prep_cache_key_changes_when_feature_pipeline_changes(tmp_path: Path):
+    data_path = tmp_path / "sample.tsv"
+    data_path.write_text("a\tb\n", encoding="utf-8")
+
+    key1 = build_prep_cache_key(
+        data_path=data_path,
+        target_label="线索评级结果",
+        schema_version="v2",
+        split_mode="random",
+        split_group_mode="phone_or_lead",
+        label_mode="hab",
+        feature_profile="auto_scorecard",
+        random_seed=42,
+        excluded_columns_version="v1",
+        feature_pipeline_version="v2",
+    )
+    key2 = build_prep_cache_key(
+        data_path=data_path,
+        target_label="线索评级结果",
+        schema_version="v2",
+        split_mode="random",
+        split_group_mode="phone_or_lead",
+        label_mode="hab",
+        feature_profile="auto_scorecard",
+        random_seed=42,
+        excluded_columns_version="v1",
+        feature_pipeline_version="v3",
     )
 
     assert key1 != key2

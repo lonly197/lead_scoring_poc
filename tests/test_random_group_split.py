@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-from src.data.loader import smart_split_data
+from src.data.loader import build_split_group_key, smart_split_data
 
 
 def test_smart_split_data_random_group_mode_keeps_phone_groups_disjoint():
@@ -36,9 +36,13 @@ def test_smart_split_data_random_group_mode_keeps_phone_groups_disjoint():
         random_seed=7,
     )
 
-    train_groups = set(train_df["split_group_key"])
-    valid_groups = set(valid_df["split_group_key"])
-    test_groups = set(test_df["split_group_key"])
+    assert "split_group_key" not in train_df.columns
+    assert "split_group_key" not in valid_df.columns
+    assert "split_group_key" not in test_df.columns
+
+    train_groups = set(build_split_group_key(train_df))
+    valid_groups = set(build_split_group_key(valid_df))
+    test_groups = set(build_split_group_key(test_df))
 
     assert split_info["mode"] == "random"
     assert train_groups.isdisjoint(valid_groups)

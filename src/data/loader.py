@@ -146,6 +146,12 @@ def _group_random_split(
     return train_df, valid_df, test_df, split_metadata
 
 
+def _drop_split_group_key(df: pd.DataFrame) -> pd.DataFrame:
+    if "split_group_key" in df.columns:
+        return df.drop(columns=["split_group_key"]).copy()
+    return df.copy()
+
+
 class DataLoader:
     """数据加载器
 
@@ -848,7 +854,12 @@ def smart_split_data(
             split_metadata["test_ids"] = test_df[id_col].tolist()
             split_metadata["id_column"] = id_col
         split_metadata["test_indices"] = test_df.index.tolist()
-        return train_df, valid_df, test_df, split_metadata
+        return (
+            _drop_split_group_key(train_df),
+            _drop_split_group_key(valid_df),
+            _drop_split_group_key(test_df),
+            split_metadata,
+        )
 
     if split_mode == "manual_oot":
         raise ValueError("manual_oot 请通过显式 train_end/valid_end 调用 split_data_oot_three_way")
@@ -894,7 +905,12 @@ def smart_split_data(
             logger.info(f"已记录 {len(test_df)} 个测试集 {id_col} 用于后续防泄漏验证")
         split_metadata["test_indices"] = test_df.index.tolist()
 
-    return train_df, valid_df, test_df, split_metadata
+    return (
+        _drop_split_group_key(train_df),
+        _drop_split_group_key(valid_df),
+        _drop_split_group_key(test_df),
+        split_metadata,
+    )
 
 
 def prepare_features(

@@ -369,6 +369,9 @@ def test_train_ohab_persists_core_artifacts_when_feature_importance_fails(monkey
 
     assert (model_dir / "predictions_test.csv").exists()
     assert feature_metadata["artifact_status"]["training_complete"] is True
+    assert feature_metadata["pipeline_contract_version"] == 3
+    assert "raw_schema_report" in feature_metadata
+    assert "post_feature_screening_report" in feature_metadata
     assert "feature_importance" in feature_metadata["artifact_status"]["supplemental_failures"]
     assert "feature_importance" in evaluation_summary["supplemental_failures"]
     assert comparison_config["models"]["LightGBMXT_BAG_L2_FULL"]["role"] == "baseline"
@@ -417,6 +420,7 @@ def test_train_ohab_skips_optional_plots_and_generates_h_topk(monkeypatch, tmp_p
     assert not (model_dir / "business_dimension_contribution.png").exists()
     assert plot_calls == []
     assert topk_calls[0]["target_class"] == "H"
+    assert feature_metadata["pipeline_contract_version"] == 3
     assert feature_metadata["artifact_status"]["supplemental_failures"] == []
     assert evaluation_summary["supplemental_failures"] == []
 

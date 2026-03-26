@@ -19,6 +19,7 @@ def build_prep_cache_key(
     feature_profile: str,
     random_seed: int,
     excluded_columns_version: str,
+    feature_pipeline_version: str,
 ) -> str:
     stat = data_path.stat()
     payload = {
@@ -33,6 +34,7 @@ def build_prep_cache_key(
         "feature_profile": feature_profile,
         "random_seed": random_seed,
         "excluded_columns_version": excluded_columns_version,
+        "feature_pipeline_version": feature_pipeline_version,
     }
     encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()[:24]

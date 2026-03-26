@@ -171,9 +171,44 @@ class LeadScoringPredictor:
 
     def _require_feature_columns(self) -> List[str]:
         """确保模型已记录训练特征列。"""
+        if not self._feature_columns and self._predictor is not None:
+            self._feature_columns = self._resolve_predictor_feature_columns(self._predictor)
         if not self._feature_columns:
             raise ValueError("模型未记录训练特征列，请重新训练或加载包含 metadata 的模型")
         return self._feature_columns
+
+    @staticmethod
+    def _resolve_predictor_feature_columns(predictor) -> Optional[List[str]]:
+        """优先使用 AutoGluon 官方原始特征契约恢复推理输入列。"""
+        if predictor is None:
+            return None
+
+        features_method = getattr(predictor, "features", None)
+        if callable(features_method):
+            try:
+                features = list(features_method(feature_stage="original"))
+                if features:
+                    return features
+            except TypeError:
+                try:
+                    features = list(features_method())
+                    if features:
+                        return features
+                except Exception:
+                    pass
+            except Exception:
+                pass
+
+        feature_metadata = getattr(predictor, "feature_metadata_in", None)
+        if feature_metadata is not None and hasattr(feature_metadata, "get_features"):
+            try:
+                features = list(feature_metadata.get_features())
+                if features:
+                    return features
+            except Exception:
+                pass
+
+        return None
 
     def _prepare_inference_data(
         self,
@@ -253,20 +288,17 @@ class LeadScoringPredictor:
         if self.label not in train_data.columns:
             raise ValueError(f"train_data 缺少目标列: {self.label}")
 
-        # 统一确定训练期特征列集合，并对训练/验证数据执行同一套对齐。
-        excluded_set = set(excluded_columns or [])
-        self._feature_columns = [
-            col for col in train_data.columns
-            if col not in excluded_set and col != self.label
-        ]
+        # 训练期对齐按原始输入列进行，真实推理契约在 fit 后回收 AutoGluon 官方特征集合。
+        raw_feature_columns = [col for col in train_data.columns if col != self.label]
+        ignored_columns = [col for col in (excluded_columns or []) if col != self.label]
         train_data = self._align_frame_to_features(
             data=train_data,
             dataset_name="train_data",
-            feature_columns=self._feature_columns,
+            feature_columns=raw_feature_columns,
             include_label=True,
         )
 
-        logger.info(f"最终训练特征数: {len(self._feature_columns)}")
+        logger.info(f"训练输入原始特征数: {len(raw_feature_columns)}")
 
         # 初始化 predictor（包含样本权重配置）
         init_kwargs = {
@@ -275,6 +307,8 @@ class LeadScoringPredictor:
             "path": str(self.output_path),
             "problem_type": self.problem_type,
         }
+        if ignored_columns:
+            init_kwargs["learner_kwargs"] = {"ignored_columns": ignored_columns}
         if self.sample_weight:
             init_kwargs["sample_weight"] = self.sample_weight
             init_kwargs["weight_evaluation"] = self.weight_evaluation
@@ -327,7 +361,7 @@ class LeadScoringPredictor:
                 fit_kwargs[dataset_name] = self._align_frame_to_features(
                     data=dataset,
                     dataset_name=dataset_name,
-                    feature_columns=self._feature_columns,
+                    feature_columns=raw_feature_columns,
                     include_label=include_label,
                 )
                 logger.info(
@@ -359,8 +393,11 @@ class LeadScoringPredictor:
 
         # 训练
         self._predictor.fit(train_data, **fit_kwargs)
+        self._feature_columns = self._resolve_predictor_feature_columns(self._predictor)
 
         logger.info("模型训练完成")
+        if self._feature_columns:
+            logger.info(f"AutoGluon 官方原始推理特征数: {len(self._feature_columns)}")
 
         # 输出训练摘要
         for cb in callbacks:
@@ -675,7 +712,6 @@ class LeadScoringPredictor:
             "output_path": str(save_path),
             "sample_weight": self.sample_weight,
             "weight_evaluation": self.weight_evaluation,
-            "feature_columns": self._feature_columns or [],
         }
         merged_extra_metadata = extra_metadata or self._extra_metadata
         if merged_extra_metadata:
@@ -705,11 +741,9 @@ class LeadScoringPredictor:
         metadata = cls._load_custom_metadata(load_path)
         predictor = cls._load_autogluon_predictor(load_path)
 
-        feature_columns = metadata.get("feature_columns")
+        feature_columns = cls._resolve_predictor_feature_columns(predictor)
         if not feature_columns:
-            feature_metadata = getattr(predictor, "feature_metadata_in", None)
-            if feature_metadata is not None and hasattr(feature_metadata, "get_features"):
-                feature_columns = list(feature_metadata.get_features())
+            feature_columns = metadata.get("feature_columns")
 
         # 创建实例
         instance = cls(
