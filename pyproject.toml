@@ -1,7 +1,7 @@
 [project]
 name = "lead-scoring-poc"
 version = "0.1.0"
-description = "销售线索智能评级POC项目 - 基于AutoGluon"
+description = "销售线索智能评级POC项目 - 基于AutoML"
 readme = "README.md"
 requires-python = ">=3.9,<3.13"
 license = { text = "MIT" }
