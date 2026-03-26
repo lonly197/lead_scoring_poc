@@ -26,7 +26,8 @@ class DataConfig:
         )
     )
 
-    # 训练/测试集划分比例
+    # 通用随机切分比例（旧训练脚本/通用脚本仍可能使用）
+    # OHAB 主流程已改为 smart_split_data，默认走随机分组切分 70/15/15
     test_size: float = field(
         default_factory=lambda: float(os.getenv("TRAIN_TEST_SPLIT_RATIO", "0.2"))
     )
@@ -47,7 +48,7 @@ class DataConfig:
 
 @dataclass
 class ModelConfig:
-    """模型配置"""
+    """通用模型配置（到店/试驾等非 OHAB 任务仍可复用）"""
 
     # 模型预设: best_quality, high_quality, good_quality, medium_quality
     preset: str = field(
@@ -59,12 +60,77 @@ class ModelConfig:
         default_factory=lambda: int(os.getenv("TIME_LIMIT", "3600"))
     )
 
-    # 评估指标
-    eval_metric: str = "roc_auc"
+    # 通用任务默认评估指标
+    eval_metric: str = field(
+        default_factory=lambda: os.getenv("MODEL_EVAL_METRIC", "roc_auc")
+    )
 
-    # 目标变量
+    # 通用任务默认目标变量
     target_label: str = field(
         default_factory=lambda: os.getenv("TARGET_LABEL", "到店标签_14天")
+    )
+
+
+@dataclass
+class OHABConfig:
+    """OHAB/HAB 训练运行时默认配置。"""
+
+    training_profile: str = field(
+        default_factory=lambda: os.getenv("OHAB_TRAINING_PROFILE", "server_16g_compare")
+    )
+    model_preset: str = field(
+        default_factory=lambda: os.getenv("OHAB_MODEL_PRESET", "good_quality")
+    )
+    time_limit: int = field(
+        default_factory=lambda: int(os.getenv("OHAB_TIME_LIMIT", "5400"))
+    )
+    eval_metric: str = field(
+        default_factory=lambda: os.getenv("OHAB_EVAL_METRIC", "balanced_accuracy")
+    )
+    num_bag_folds: int = field(
+        default_factory=lambda: int(os.getenv("OHAB_NUM_BAG_FOLDS", "3"))
+    )
+    label_mode: str = field(
+        default_factory=lambda: os.getenv("OHAB_LABEL_MODE", "hab")
+    )
+    enable_model_comparison: bool = field(
+        default_factory=lambda: os.getenv("OHAB_ENABLE_MODEL_COMPARISON", "true").lower() in {"1", "true", "yes", "y", "on"}
+    )
+    baseline_family: str = field(
+        default_factory=lambda: os.getenv("OHAB_BASELINE_FAMILY", "gbm")
+    )
+    memory_limit_gb: str = field(
+        default_factory=lambda: os.getenv("OHAB_MEMORY_LIMIT_GB", "")
+    )
+    fit_strategy: str = field(
+        default_factory=lambda: os.getenv("OHAB_FIT_STRATEGY", "sequential")
+    )
+    excluded_model_types: str = field(
+        default_factory=lambda: os.getenv("OHAB_EXCLUDED_MODEL_TYPES", "RF,XT,KNN,FASTAI,NN_TORCH")
+    )
+    num_folds_parallel: str = field(
+        default_factory=lambda: os.getenv("OHAB_NUM_FOLDS_PARALLEL", "1")
+    )
+    max_memory_ratio: str = field(
+        default_factory=lambda: os.getenv("OHAB_MAX_MEMORY_RATIO", "0.7")
+    )
+    generate_plots: bool = field(
+        default_factory=lambda: os.getenv("OHAB_GENERATE_PLOTS", "false").lower() in {"1", "true", "yes", "y", "on"}
+    )
+    split_mode: str = field(
+        default_factory=lambda: os.getenv("OHAB_SPLIT_MODE", "random")
+    )
+    auto_oot_min_days: int = field(
+        default_factory=lambda: int(os.getenv("OHAB_AUTO_OOT_MIN_DAYS", "90"))
+    )
+    pipeline_mode: str = field(
+        default_factory=lambda: os.getenv("OHAB_PIPELINE_MODE", "two_stage")
+    )
+    split_group_mode: str = field(
+        default_factory=lambda: os.getenv("OHAB_SPLIT_GROUP_MODE", "phone_or_lead")
+    )
+    feature_profile: str = field(
+        default_factory=lambda: os.getenv("OHAB_FEATURE_PROFILE", "auto_scorecard")
     )
 
 
@@ -245,6 +311,7 @@ class Config:
 
     data: DataConfig = field(default_factory=DataConfig)
     model: ModelConfig = field(default_factory=ModelConfig)
+    ohab: OHABConfig = field(default_factory=OHABConfig)
     feature: FeatureConfig = field(default_factory=FeatureConfig)
     output: OutputConfig = field(default_factory=OutputConfig)
 

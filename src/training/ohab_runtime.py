@@ -25,7 +25,7 @@ TRAINING_PROFILES: dict[str, dict[str, Any]] = {
         "preset": "good_quality",
         "time_limit": 5400,
         "num_bag_folds": 3,
-        "eval_metric": "log_loss",
+        "eval_metric": "balanced_accuracy",
         "label_mode": "hab",
         "enable_model_comparison": True,
         "baseline_family": "gbm",
@@ -35,6 +35,11 @@ TRAINING_PROFILES: dict[str, dict[str, Any]] = {
         "excluded_model_types": DEFAULT_MEMORY_HEAVY_MODELS,
         "num_folds_parallel": 1,
         "max_memory_ratio": 0.7,  # 单模型内存上限
+        "split_mode": "random",
+        "auto_oot_min_days": 90,
+        "pipeline_mode": "two_stage",
+        "split_group_mode": "phone_or_lead",
+        "feature_profile": "auto_scorecard",
     },
     "server_16g_fast": {
         "preset": "medium_quality",
@@ -50,6 +55,11 @@ TRAINING_PROFILES: dict[str, dict[str, Any]] = {
         "excluded_model_types": DEFAULT_MEMORY_HEAVY_MODELS,
         "num_folds_parallel": 1,
         "max_memory_ratio": 0.7,
+        "split_mode": "random",
+        "auto_oot_min_days": 90,
+        "pipeline_mode": "single_stage",
+        "split_group_mode": "phone_or_lead",
+        "feature_profile": "auto_scorecard",
     },
     "server_16g_probe_nn_torch": {
         "preset": "good_quality",
@@ -65,6 +75,11 @@ TRAINING_PROFILES: dict[str, dict[str, Any]] = {
         "excluded_model_types": ["RF", "XT", "KNN", "FASTAI"],
         "num_folds_parallel": 1,
         "max_memory_ratio": 0.7,
+        "split_mode": "random",
+        "auto_oot_min_days": 90,
+        "pipeline_mode": "single_stage",
+        "split_group_mode": "phone_or_lead",
+        "feature_profile": "auto_scorecard",
     },
     "server_16g_compare_balanced": {
         "preset": "good_quality",
@@ -80,6 +95,11 @@ TRAINING_PROFILES: dict[str, dict[str, Any]] = {
         "excluded_model_types": DEFAULT_MEMORY_HEAVY_MODELS,
         "num_folds_parallel": 1,
         "max_memory_ratio": 0.7,
+        "split_mode": "random",
+        "auto_oot_min_days": 90,
+        "pipeline_mode": "two_stage",
+        "split_group_mode": "phone_or_lead",
+        "feature_profile": "auto_scorecard",
     },
     "lab_full_quality": {
         "preset": "high_quality",
@@ -95,6 +115,11 @@ TRAINING_PROFILES: dict[str, dict[str, Any]] = {
         "excluded_model_types": None,
         "num_folds_parallel": None,
         "max_memory_ratio": None,
+        "split_mode": "random",
+        "auto_oot_min_days": 90,
+        "pipeline_mode": "two_stage",
+        "split_group_mode": "phone_or_lead",
+        "feature_profile": "auto_scorecard",
     },
 }
 
@@ -380,6 +405,38 @@ def resolve_training_config(args) -> dict[str, Any]:
             )
             is not None
             else None
+        ),
+        "split_mode": _coalesce(
+            getattr(args, "split_mode", None),
+            _env("OHAB_SPLIT_MODE"),
+            profile.get("split_mode"),
+            "random",
+        ),
+        "auto_oot_min_days": int(
+            _coalesce(
+                getattr(args, "auto_oot_min_days", None),
+                _env("OHAB_AUTO_OOT_MIN_DAYS"),
+                profile.get("auto_oot_min_days"),
+                90,
+            )
+        ),
+        "pipeline_mode": _coalesce(
+            getattr(args, "pipeline_mode", None),
+            _env("OHAB_PIPELINE_MODE"),
+            profile.get("pipeline_mode"),
+            "two_stage",
+        ),
+        "split_group_mode": _coalesce(
+            getattr(args, "split_group_mode", None),
+            _env("OHAB_SPLIT_GROUP_MODE"),
+            profile.get("split_group_mode"),
+            "phone_or_lead",
+        ),
+        "feature_profile": _coalesce(
+            getattr(args, "feature_profile", None),
+            _env("OHAB_FEATURE_PROFILE"),
+            profile.get("feature_profile"),
+            "auto_scorecard",
         ),
         "detected_resources": detected_resources,
         "resource_tuning": {

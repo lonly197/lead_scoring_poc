@@ -14,7 +14,6 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
-from sklearn.model_selection import train_test_split
 
 from .adapter import (
     detect_data_format,
@@ -26,6 +25,110 @@ from .adapter import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def build_split_group_key(df: pd.DataFrame) -> pd.Series:
+    """构建随机切分分组键，优先按手机号聚合，缺失时回退到线索唯一ID。"""
+    if "手机号_脱敏" in df.columns:
+        phone = (
+            df["手机号_脱敏"]
+            .fillna("")
+            .astype(str)
+            .str.strip()
+        )
+        valid_phone = phone.ne("")
+    else:
+        phone = pd.Series([""] * len(df), index=df.index, dtype="object")
+        valid_phone = pd.Series([False] * len(df), index=df.index)
+
+    if "线索唯一ID" in df.columns:
+        lead_id = (
+            df["线索唯一ID"]
+            .fillna("")
+            .astype(str)
+            .str.strip()
+        )
+    else:
+        lead_id = pd.Series(df.index.astype(str), index=df.index, dtype="object")
+
+    fallback = lead_id.where(lead_id.ne(""), df.index.astype(str))
+    return pd.Series(
+        np.where(valid_phone, "phone::" + phone, "lead::" + fallback),
+        index=df.index,
+        name="split_group_key",
+    )
+
+
+def _stratified_random_split(
+    df: pd.DataFrame,
+    target_label: str,
+    ratios: Tuple[float, float, float],
+    random_seed: int,
+) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """不依赖 sklearn 的分层随机三段切分。"""
+    train_parts = []
+    valid_parts = []
+    test_parts = []
+    rng = np.random.default_rng(random_seed)
+
+    for _, subset in df.groupby(target_label, dropna=False):
+        subset = subset.sample(frac=1, random_state=int(rng.integers(0, 1_000_000)))
+        n = len(subset)
+        train_end = max(1, int(round(n * ratios[0]))) if n >= 3 else max(1, n - 2)
+        valid_end = train_end + max(1, int(round(n * ratios[1]))) if n >= 3 else min(n, train_end + 1)
+        valid_end = min(valid_end, n - 1) if n >= 3 else valid_end
+
+        train_parts.append(subset.iloc[:train_end])
+        valid_parts.append(subset.iloc[train_end:valid_end])
+        test_parts.append(subset.iloc[valid_end:])
+
+    train_df = pd.concat(train_parts).sample(frac=1, random_state=random_seed).reset_index(drop=True)
+    valid_df = pd.concat(valid_parts).sample(frac=1, random_state=random_seed).reset_index(drop=True)
+    test_df = pd.concat(test_parts).sample(frac=1, random_state=random_seed).reset_index(drop=True)
+    return train_df, valid_df, test_df
+
+
+def _group_random_split(
+    df: pd.DataFrame,
+    target_label: str,
+    group_by: str,
+    ratios: Tuple[float, float, float],
+    random_seed: int,
+) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, dict]:
+    """按分组键随机切分，保证 train/valid/test 组互斥。"""
+    working_df = df.copy()
+    if group_by == "phone_or_lead":
+        working_df["split_group_key"] = build_split_group_key(working_df)
+    else:
+        raise ValueError(f"不支持的 group_by: {group_by}")
+
+    group_frame = (
+        working_df.groupby("split_group_key")[target_label]
+        .agg(lambda s: s.mode().iloc[0] if not s.mode().empty else s.iloc[0])
+        .reset_index()
+    )
+    train_groups, valid_groups, test_groups = _stratified_random_split(
+        group_frame,
+        target_label=target_label,
+        ratios=ratios,
+        random_seed=random_seed,
+    )
+
+    train_keys = set(train_groups["split_group_key"])
+    valid_keys = set(valid_groups["split_group_key"])
+    test_keys = set(test_groups["split_group_key"])
+
+    train_df = working_df[working_df["split_group_key"].isin(train_keys)].copy()
+    valid_df = working_df[working_df["split_group_key"].isin(valid_keys)].copy()
+    test_df = working_df[working_df["split_group_key"].isin(test_keys)].copy()
+
+    split_metadata = {
+        "split_group_mode": group_by,
+        "train_group_keys": sorted(train_keys),
+        "valid_group_keys": sorted(valid_keys),
+        "test_group_keys": sorted(test_keys),
+    }
+    return train_df, valid_df, test_df, split_metadata
 
 
 class DataLoader:
@@ -471,12 +574,18 @@ def split_data(
     # 分层采样
     stratify_col = df_valid[target_label] if stratify else None
 
-    train_df, test_df = train_test_split(
-        df_valid,
-        test_size=test_size,
-        random_state=random_seed,
-        stratify=stratify_col,
-    )
+    if stratify_col is None:
+        shuffled = df_valid.sample(frac=1, random_state=random_seed)
+        split_index = int(round(len(shuffled) * (1 - test_size)))
+        train_df = shuffled.iloc[:split_index].copy()
+        test_df = shuffled.iloc[split_index:].copy()
+    else:
+        train_df, _, test_df = _stratified_random_split(
+            df_valid,
+            target_label=target_label,
+            ratios=(1 - test_size, 0.0, test_size),
+            random_seed=random_seed,
+        )
 
     logger.info(f"训练集: {len(train_df)} 行, 测试集: {len(test_df)} 行")
 
@@ -652,6 +761,9 @@ def smart_split_data(
     time_column: str = "线索创建时间",
     min_oot_days: int = 14,
     random_seed: int = 42,
+    split_mode: str = "auto",
+    auto_oot_min_days: Optional[int] = None,
+    group_by: Optional[str] = None,
 ) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, dict]:
     """
     智能数据切分（自适应 OOT 或 随机切分）
@@ -697,7 +809,26 @@ def smart_split_data(
         "max_date": str(max_date.date()),
     }
 
-    if time_span >= min_oot_days:
+    effective_min_oot_days = auto_oot_min_days if auto_oot_min_days is not None else min_oot_days
+
+    if split_mode == "random":
+        logger.info("根据配置强制使用随机切分")
+        train_df, valid_df, test_df, group_metadata = _group_random_split(
+            df_valid,
+            target_label=target_label,
+            group_by=group_by or "phone_or_lead",
+            ratios=(0.7, 0.15, 0.15),
+            random_seed=random_seed,
+        )
+        split_metadata["mode"] = "random"
+        split_metadata.update(group_metadata)
+        split_metadata["id_column"] = "线索唯一ID"
+        return train_df, valid_df, test_df, split_metadata
+
+    if split_mode == "manual_oot":
+        raise ValueError("manual_oot 请通过显式 train_end/valid_end 调用 split_data_oot_three_way")
+
+    if time_span >= effective_min_oot_days and split_mode != "random":
         logger.info(f"跨度满足 OOT 要求 (>= {min_oot_days} 天)，触发自动 OOT 切分")
         # 按 70% / 15% / 15% 的时间跨度划分
         total_seconds = (max_date - min_date).total_seconds()
@@ -721,24 +852,22 @@ def smart_split_data(
 
     else:
         logger.warning(f"跨度不满足 OOT 要求 (< {min_oot_days} 天)，降级为随机切分 (Random Split)")
-        
-        train_df, test_df = split_data(
-            df_valid, target_label, test_size=0.2, random_seed=random_seed, stratify=True
+
+        train_df, valid_df, test_df, group_metadata = _group_random_split(
+            df_valid,
+            target_label=target_label,
+            group_by=group_by or "phone_or_lead",
+            ratios=(0.7, 0.15, 0.15),
+            random_seed=random_seed,
         )
-        # 验证集为空
-        valid_df = pd.DataFrame(columns=df_valid.columns)
-        
         split_metadata["mode"] = "random"
-        # 记录测试集的原始索引或唯一 ID，这里使用 dataframe 的 index (需保存下来)
-        # 假设原始 df 的 index 具有业务唯一性，推荐记录 "线索唯一ID"
+        split_metadata.update(group_metadata)
         id_col = "线索唯一ID"
         if id_col in test_df.columns:
             split_metadata["test_ids"] = test_df[id_col].tolist()
             split_metadata["id_column"] = id_col
             logger.info(f"已记录 {len(test_df)} 个测试集 {id_col} 用于后续防泄漏验证")
-        else:
-            split_metadata["test_indices"] = test_df.index.tolist()
-            logger.warning(f"未找到 '{id_col}'，记录测试集物理行索引用于防泄漏验证（存在一定风险）")
+        split_metadata["test_indices"] = test_df.index.tolist()
 
     return train_df, valid_df, test_df, split_metadata
 

@@ -25,6 +25,7 @@ project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
 from config.config import config, get_excluded_columns
+from src.data.feature_screening import apply_screening_report, screen_features
 from src.data.loader import DataLoader, FeatureEngineer, smart_split_data, split_data_oot_three_way
 from src.data.label_policy import (
     apply_ohab_label_policy,
@@ -44,6 +45,13 @@ from src.evaluation.ohab_metrics import (
 from src.models.predictor import LeadScoringPredictor
 from src.evaluation.business_logic import calculate_dimension_contribution, BUSINESS_DIMENSION_MAP
 from src.training.ohab_runtime import resolve_training_config
+from src.training.hab_pipeline import (
+    combine_stage_predictions,
+    compute_pipeline_metrics,
+    prepare_stage1_labels,
+    prepare_stage2_frame,
+    tune_h_threshold,
+)
 from src.utils.visualization import plot_feature_importance, plot_dimension_contribution
 from src.utils.helpers import (
     check_disk_space,
@@ -156,6 +164,15 @@ def _build_model_decision_policy(
     )
     decision_policy["model_name"] = model_name
     return decision_policy
+
+
+def _select_probability_column(proba_df: pd.DataFrame, preferred_label: str) -> pd.Series:
+    if preferred_label in proba_df.columns:
+        return pd.to_numeric(proba_df[preferred_label], errors="coerce").fillna(0.0)
+    string_mapping = {str(column): column for column in proba_df.columns}
+    if preferred_label in string_mapping:
+        return pd.to_numeric(proba_df[string_mapping[preferred_label]], errors="coerce").fillna(0.0)
+    raise ValueError(f"预测概率中缺少目标列: {preferred_label}")
 
 
 def parse_args():
@@ -326,6 +343,40 @@ def parse_args():
         default=None,
         help="并行训练的 fold 数量（默认自动，低内存机器建议 2-3）",
     )
+    parser.add_argument(
+        "--split-mode",
+        type=str,
+        default=None,
+        choices=["random", "auto_oot", "manual_oot", "auto"],
+        help="数据切分模式",
+    )
+    parser.add_argument(
+        "--auto-oot-min-days",
+        type=int,
+        default=None,
+        help="自动 OOT 的最小时间跨度（天）",
+    )
+    parser.add_argument(
+        "--pipeline-mode",
+        type=str,
+        default=None,
+        choices=["single_stage", "two_stage"],
+        help="训练流水线模式",
+    )
+    parser.add_argument(
+        "--split-group-mode",
+        type=str,
+        default=None,
+        choices=["phone_or_lead"],
+        help="随机切分分组模式",
+    )
+    parser.add_argument(
+        "--feature-profile",
+        type=str,
+        default=None,
+        choices=["auto_scorecard"],
+        help="特征筛选方案",
+    )
 
     return parser.parse_args()
 
@@ -353,6 +404,11 @@ def main():
     excluded_model_types = runtime_config["excluded_model_types"]
     num_folds_parallel = runtime_config["num_folds_parallel"]
     max_memory_ratio = runtime_config["max_memory_ratio"]
+    split_mode = runtime_config.get("split_mode", "random")
+    auto_oot_min_days = runtime_config.get("auto_oot_min_days", 90)
+    pipeline_mode = runtime_config.get("pipeline_mode", "single_stage")
+    split_group_mode = runtime_config.get("split_group_mode", "phone_or_lead")
+    feature_profile = runtime_config.get("feature_profile", "auto_scorecard")
     
     # 日志设置
     if args.log_file:
@@ -443,7 +499,17 @@ def main():
             )
             split_info = {"mode": "oot_manual", "train_end": args.train_end, "valid_end": args.valid_end}
         else:
-            train_df, valid_df, test_df, split_info = smart_split_data(df, target_label)
+            try:
+                train_df, valid_df, test_df, split_info = smart_split_data(
+                    df,
+                    target_label,
+                    split_mode="auto_oot" if split_mode == "auto_oot" else split_mode,
+                    auto_oot_min_days=auto_oot_min_days,
+                    group_by=split_group_mode,
+                )
+            except TypeError:
+                logger.warning("smart_split_data 不支持新切分参数，回退到兼容调用")
+                train_df, valid_df, test_df, split_info = smart_split_data(df, target_label)
 
         label_policy = build_ohab_label_policy(
             train_df,
@@ -460,6 +526,10 @@ def main():
         train_df = filter_to_effective_ohab_labels(train_df, target_label, label_policy)
         valid_df = filter_to_effective_ohab_labels(valid_df, target_label, label_policy)
         test_df = filter_to_effective_ohab_labels(test_df, target_label, label_policy)
+
+        train_df, screening_report = screen_features(train_df, target_label=target_label)
+        valid_df = apply_screening_report(valid_df, screening_report)
+        test_df = apply_screening_report(test_df, screening_report)
 
         # 3. 特征工程（先 fit 训练集，再 transform 验证/测试集）
         logger.info("步骤 3/6: 特征工程")
@@ -482,6 +552,11 @@ def main():
         feature_metadata["label_mode"] = label_mode
         feature_metadata["schema_contract"] = adaptation_metadata.get("schema_contract", {})
         feature_metadata["feature_names_version"] = "ohab_schema_contract_v2"
+        feature_metadata["screening_report"] = screening_report
+        feature_metadata["split_mode"] = split_mode
+        feature_metadata["split_group_mode"] = split_group_mode
+        feature_metadata["pipeline_mode"] = pipeline_mode
+        feature_metadata["feature_profile"] = feature_profile
         if adaptation_metadata.get("json_feature_source"):
             feature_metadata["json_feature_source"] = adaptation_metadata["json_feature_source"]
         feature_metadata["artifact_status"] = _build_artifact_status(
@@ -497,93 +572,261 @@ def main():
         excluded_columns = get_excluded_columns(target_label)
         if excluded_model_types:
             logger.info(f"排除模型类型: {', '.join(excluded_model_types)}")
-
-        predictor = LeadScoringPredictor(
-            label=target_label,
-            output_path=str(output_dir),
-            eval_metric=eval_metric,
-            problem_type="multiclass",
-            sample_weight="balance_weight",
-            max_memory_usage_ratio=max_memory_ratio,
-            memory_limit_gb=memory_limit_gb,
-            fit_strategy=fit_strategy,
-            excluded_model_types=excluded_model_types,
-            num_folds_parallel=num_folds_parallel,
-        )
-
-        train_kwargs = {
-            "train_data": train_df,
-            "presets": preset,
-            "time_limit": time_limit,
-            "excluded_columns": excluded_columns,
-            "num_bag_folds": num_bag_folds if num_bag_folds > 0 else None,
-        }
-        if len(valid_df) > 0:
-            train_kwargs["tuning_data"] = valid_df
-
-        predictor.train(**train_kwargs)
-        best_model_name = predictor.get_model_info().get("best_model")
         comparison_config = {
             "enabled": False,
             "baseline_family_requested": baseline_family,
-            "best_model_name": best_model_name,
+            "best_model_name": None,
             "baseline_model_name": None,
             "models": {},
         }
+        pipeline_metadata = {
+            "pipeline_mode": pipeline_mode,
+            "split_mode": split_mode,
+            "split_group_mode": split_group_mode,
+            "feature_profile": feature_profile,
+        }
 
-        if enable_model_comparison and len(valid_df) > 0:
-            valid_leaderboard_df = predictor.get_leaderboard(valid_df, silent=True)
-            valid_leaderboard_df.to_csv(output_dir / "leaderboard_valid.csv", index=False, encoding="utf-8-sig")
-            baseline_selection = _select_baseline_model_from_leaderboard(valid_leaderboard_df, baseline_family)
-            baseline_model_name = baseline_selection["baseline_model_name"]
-            comparison_config.update(
+        if pipeline_mode == "two_stage":
+            logger.info("启用两阶段 HAB 流水线训练")
+            baseline_predictor = None
+            baseline_model_name = None
+            baseline_decision_policy = {"strategy": "argmax"}
+            stage1_train = train_df.copy()
+            stage1_valid = valid_df.copy()
+            stage1_test = test_df.copy()
+            stage1_train["stage1_label"] = prepare_stage1_labels(stage1_train, target_label)
+            stage1_valid["stage1_label"] = prepare_stage1_labels(stage1_valid, target_label)
+            stage1_test["stage1_label"] = prepare_stage1_labels(stage1_test, target_label)
+
+            stage2_train = prepare_stage2_frame(train_df, target_label)
+            stage2_valid = prepare_stage2_frame(valid_df, target_label)
+            stage2_test = prepare_stage2_frame(test_df, target_label)
+
+            stage1_dir = output_dir / "stage1_h_vs_nonh"
+            stage2_dir = output_dir / "stage2_a_vs_b"
+            stage1_predictor = LeadScoringPredictor(
+                label="stage1_label",
+                output_path=str(stage1_dir),
+                eval_metric=eval_metric,
+                problem_type="binary",
+                sample_weight="balance_weight",
+                max_memory_usage_ratio=max_memory_ratio,
+                memory_limit_gb=memory_limit_gb,
+                fit_strategy=fit_strategy,
+                excluded_model_types=excluded_model_types,
+                num_folds_parallel=num_folds_parallel,
+            )
+            stage2_predictor = LeadScoringPredictor(
+                label="stage2_label",
+                output_path=str(stage2_dir),
+                eval_metric=eval_metric,
+                problem_type="binary",
+                sample_weight="balance_weight",
+                max_memory_usage_ratio=max_memory_ratio,
+                memory_limit_gb=memory_limit_gb,
+                fit_strategy=fit_strategy,
+                excluded_model_types=excluded_model_types,
+                num_folds_parallel=num_folds_parallel,
+            )
+
+            stage1_excluded = list(dict.fromkeys(excluded_columns + [target_label, "stage2_label"]))
+            stage2_excluded = list(dict.fromkeys(excluded_columns + [target_label, "stage1_label"]))
+
+            stage1_train_kwargs = {
+                "train_data": stage1_train,
+                "presets": preset,
+                "time_limit": time_limit,
+                "excluded_columns": stage1_excluded,
+                "num_bag_folds": num_bag_folds if num_bag_folds > 0 else None,
+            }
+            stage2_train_kwargs = {
+                "train_data": stage2_train,
+                "presets": preset,
+                "time_limit": time_limit,
+                "excluded_columns": stage2_excluded,
+                "num_bag_folds": num_bag_folds if num_bag_folds > 0 else None,
+            }
+            if len(stage1_valid) > 0:
+                stage1_train_kwargs["tuning_data"] = stage1_valid
+            if len(stage2_valid) > 0:
+                stage2_train_kwargs["tuning_data"] = stage2_valid
+
+            stage1_predictor.train(**stage1_train_kwargs)
+            stage2_predictor.train(**stage2_train_kwargs)
+
+            stage1_valid_proba = stage1_predictor.predict_proba(valid_df if len(valid_df) > 0 else test_df)
+            stage2_valid_proba = stage2_predictor.predict_proba(valid_df if len(valid_df) > 0 else test_df)
+            decision_policy = tune_h_threshold(
+                y_true=(valid_df if len(valid_df) > 0 else test_df)[target_label].reset_index(drop=True),
+                stage1_h_proba=_select_probability_column(stage1_valid_proba.reset_index(drop=True), "H"),
+                stage2_ab_proba=stage2_valid_proba.reset_index(drop=True),
+                thresholds=(0.35, 0.4, 0.45, 0.5, 0.55, 0.6, 0.65),
+            )
+
+            stage1_test_proba = stage1_predictor.predict_proba(test_df).reset_index(drop=True)
+            stage2_test_proba = stage2_predictor.predict_proba(test_df).reset_index(drop=True)
+            y_true = test_df[target_label].reset_index(drop=True)
+            y_pred, y_proba = combine_stage_predictions(
+                stage1_h_proba=_select_probability_column(stage1_test_proba, "H"),
+                stage2_ab_proba=stage2_test_proba,
+                h_threshold=decision_policy["h_threshold"],
+            )
+            raw_evaluation_results = compute_pipeline_metrics(y_true, y_pred)
+            best_model_name = "two_stage_pipeline"
+            pipeline_metadata.update(
                 {
-                    "enabled": True,
-                    "baseline_model_name": baseline_model_name,
-                    "baseline_selection": baseline_selection,
-                    "comparison_model_names": list(dict.fromkeys([baseline_model_name, best_model_name])),
+                    "stage1_model_dir": str(stage1_dir),
+                    "stage2_model_dir": str(stage2_dir),
+                    "decision_policy": decision_policy,
+                    "technical_best_model": best_model_name,
                 }
             )
-            for model_name, role in [
-                (baseline_model_name, "baseline"),
-                (best_model_name, "best"),
-            ]:
-                comparison_config["models"][model_name] = {
-                    "role": role,
-                    "decision_policy": _build_model_decision_policy(
-                        predictor=predictor,
+            predictor = None
+
+            if enable_model_comparison:
+                logger.info("训练 GBDT 单阶段基线模型用于对照评估")
+                baseline_dir = output_dir / "baseline_gbdt"
+                baseline_predictor = LeadScoringPredictor(
+                    label=target_label,
+                    output_path=str(baseline_dir),
+                    eval_metric=eval_metric,
+                    problem_type="multiclass",
+                    sample_weight="balance_weight",
+                    max_memory_usage_ratio=max_memory_ratio,
+                    memory_limit_gb=memory_limit_gb,
+                    fit_strategy=fit_strategy,
+                    excluded_model_types=excluded_model_types,
+                    num_folds_parallel=num_folds_parallel,
+                )
+                baseline_train_kwargs = {
+                    "train_data": train_df,
+                    "presets": preset,
+                    "time_limit": time_limit,
+                    "excluded_columns": excluded_columns,
+                    "num_bag_folds": num_bag_folds if num_bag_folds > 0 else None,
+                    "hyperparameters": {"GBM": {}},
+                }
+                if len(valid_df) > 0:
+                    baseline_train_kwargs["tuning_data"] = valid_df
+                baseline_predictor.train(**baseline_train_kwargs)
+                baseline_model_name = baseline_predictor.get_model_info().get("best_model")
+                if len(valid_df) > 0:
+                    baseline_decision_policy = _build_model_decision_policy(
+                        predictor=baseline_predictor,
                         dataset=valid_df,
                         target_label=target_label,
-                        label_mode=args.label_mode,
-                        model_name=model_name,
-                    ),
+                        label_mode=label_mode,
+                        model_name=baseline_model_name,
+                    )
+                comparison_config = {
+                    "enabled": True,
+                    "baseline_family_requested": baseline_family,
+                    "best_model_name": best_model_name,
+                    "baseline_model_name": "gbdt_baseline",
+                    "models": {
+                        "two_stage_pipeline": {
+                            "role": "best",
+                            "decision_policy": decision_policy,
+                            "pipeline_mode": "two_stage",
+                        },
+                        "gbdt_baseline": {
+                            "role": "baseline",
+                            "model_dir": str(baseline_dir),
+                            "model_name": baseline_model_name,
+                            "decision_policy": baseline_decision_policy,
+                        },
+                    },
                 }
-            logger.info(f"模型对比配置: {comparison_config}")
-        elif enable_model_comparison:
-            logger.warning("启用了模型对比，但验证集为空，跳过 baseline 配置生成")
+                pipeline_metadata["baseline_model_dir"] = str(baseline_dir)
+                pipeline_metadata["baseline_model_name"] = baseline_model_name
+        else:
+            predictor = LeadScoringPredictor(
+                label=target_label,
+                output_path=str(output_dir),
+                eval_metric=eval_metric,
+                problem_type="multiclass",
+                sample_weight="balance_weight",
+                max_memory_usage_ratio=max_memory_ratio,
+                memory_limit_gb=memory_limit_gb,
+                fit_strategy=fit_strategy,
+                excluded_model_types=excluded_model_types,
+                num_folds_parallel=num_folds_parallel,
+            )
+
+            train_kwargs = {
+                "train_data": train_df,
+                "presets": preset,
+                "time_limit": time_limit,
+                "excluded_columns": excluded_columns,
+                "num_bag_folds": num_bag_folds if num_bag_folds > 0 else None,
+            }
+            if len(valid_df) > 0:
+                train_kwargs["tuning_data"] = valid_df
+
+            predictor.train(**train_kwargs)
+            best_model_name = predictor.get_model_info().get("best_model")
+            comparison_config = {
+                "enabled": False,
+                "baseline_family_requested": baseline_family,
+                "best_model_name": best_model_name,
+                "baseline_model_name": None,
+                "models": {},
+            }
+
+            if enable_model_comparison and len(valid_df) > 0:
+                valid_leaderboard_df = predictor.get_leaderboard(valid_df, silent=True)
+                valid_leaderboard_df.to_csv(output_dir / "leaderboard_valid.csv", index=False, encoding="utf-8-sig")
+                baseline_selection = _select_baseline_model_from_leaderboard(valid_leaderboard_df, baseline_family)
+                baseline_model_name = baseline_selection["baseline_model_name"]
+                comparison_config.update(
+                    {
+                        "enabled": True,
+                        "baseline_model_name": baseline_model_name,
+                        "baseline_selection": baseline_selection,
+                        "comparison_model_names": list(dict.fromkeys([baseline_model_name, best_model_name])),
+                    }
+                )
+                for model_name, role in [
+                    (baseline_model_name, "baseline"),
+                    (best_model_name, "best"),
+                ]:
+                    comparison_config["models"][model_name] = {
+                        "role": role,
+                        "decision_policy": _build_model_decision_policy(
+                            predictor=predictor,
+                            dataset=valid_df,
+                            target_label=target_label,
+                            label_mode=args.label_mode,
+                            model_name=model_name,
+                        ),
+                    }
+                logger.info(f"模型对比配置: {comparison_config}")
+            elif enable_model_comparison:
+                logger.warning("启用了模型对比，但验证集为空，跳过 baseline 配置生成")
 
         # 5. 模型评估
         logger.info("步骤 5/6: 模型评估与可解释性分析")
-        raw_evaluation_results = predictor.evaluate(test_df)
-        logger.info(f"原始评估结果: {raw_evaluation_results}")
+        if pipeline_mode != "two_stage":
+            raw_evaluation_results = predictor.evaluate(test_df)
+            logger.info(f"原始评估结果: {raw_evaluation_results}")
 
-        decision_policy = {"strategy": "argmax"}
-        if comparison_config["enabled"]:
-            decision_policy = comparison_config["models"][best_model_name]["decision_policy"]
-        elif label_mode == "hab" and len(valid_df) > 0:
-            valid_proba = predictor.predict_proba(valid_df).reset_index(drop=True)
-            decision_policy = optimize_hab_decision_policy(
-                valid_df[target_label].reset_index(drop=True),
-                valid_proba,
-            )
-            logger.info(f"验证集阈值策略: {decision_policy}")
+            decision_policy = {"strategy": "argmax"}
+            if comparison_config["enabled"]:
+                decision_policy = comparison_config["models"][best_model_name]["decision_policy"]
+            elif label_mode == "hab" and len(valid_df) > 0:
+                valid_proba = predictor.predict_proba(valid_df).reset_index(drop=True)
+                decision_policy = optimize_hab_decision_policy(
+                    valid_df[target_label].reset_index(drop=True),
+                    valid_proba,
+                )
+                logger.info(f"验证集阈值策略: {decision_policy}")
 
-        y_true = test_df[target_label].reset_index(drop=True)
-        y_proba = predictor.predict_proba(test_df, model=best_model_name).reset_index(drop=True)
-        if label_mode == "hab":
-            y_pred = apply_hab_decision_policy(y_proba, decision_policy)
-        else:
-            y_pred = predictor.predict(test_df, model=best_model_name)
+            y_true = test_df[target_label].reset_index(drop=True)
+            y_proba = predictor.predict_proba(test_df, model=best_model_name).reset_index(drop=True)
+            if label_mode == "hab":
+                y_pred = apply_hab_decision_policy(y_proba, decision_policy)
+            else:
+                y_pred = predictor.predict(test_df, model=best_model_name)
 
         confusion_df = confusion_matrix_frame(y_true, y_pred)
         classification_dict = classification_report_dict(y_true, y_pred)
@@ -639,6 +882,7 @@ def main():
             "label_mode": label_mode,
             "decision_policy": decision_policy,
             "model_comparison": comparison_config,
+            "pipeline_metadata": pipeline_metadata,
             "split_info": split_info,
             "top_ratios": list(top_ratios),
             "monotonicity_check": monotonicity_result,
@@ -657,30 +901,75 @@ def main():
         feature_metadata["decision_policy"] = decision_policy
         feature_metadata["label_mode"] = label_mode
         feature_metadata["model_comparison"] = comparison_config
+        feature_metadata["pipeline_metadata"] = pipeline_metadata
         feature_metadata["training_profile"] = runtime_config["training_profile"]
         feature_metadata["resource_config"] = evaluation_summary["resource_config"]
 
         # 6. 保存与清理
         logger.info("步骤 6/6: 保存与清理")
-        predictor.save(
-            extra_metadata={
-                "label_policy": label_policy,
-                "label_mode": label_mode,
-                "decision_policy": decision_policy,
-                "model_comparison": comparison_config,
-                "schema_contract": feature_metadata.get("schema_contract", {}),
-                "interaction_context": feature_metadata.get("interaction_context", {}),
-                "training_profile": runtime_config["training_profile"],
-                "resource_config": evaluation_summary["resource_config"],
-            }
-        )
-        if comparison_config["enabled"]:
-            predictor.cleanup(
-                keep_best_only=False,
-                keep_model_names=comparison_config.get("comparison_model_names"),
+        if pipeline_mode == "two_stage":
+            stage1_predictor.save(
+                extra_metadata={
+                    "label_policy": label_policy,
+                    "label_mode": label_mode,
+                    "decision_policy": decision_policy,
+                    "pipeline_metadata": pipeline_metadata,
+                    "schema_contract": feature_metadata.get("schema_contract", {}),
+                    "interaction_context": feature_metadata.get("interaction_context", {}),
+                    "training_profile": runtime_config["training_profile"],
+                    "resource_config": evaluation_summary["resource_config"],
+                }
             )
+            stage2_predictor.save(
+                extra_metadata={
+                    "label_policy": label_policy,
+                    "label_mode": label_mode,
+                    "decision_policy": decision_policy,
+                    "pipeline_metadata": pipeline_metadata,
+                    "schema_contract": feature_metadata.get("schema_contract", {}),
+                    "interaction_context": feature_metadata.get("interaction_context", {}),
+                    "training_profile": runtime_config["training_profile"],
+                    "resource_config": evaluation_summary["resource_config"],
+                }
+            )
+            stage1_predictor.cleanup(keep_best_only=True)
+            stage2_predictor.cleanup(keep_best_only=True)
+            if baseline_predictor is not None:
+                baseline_predictor.save(
+                    extra_metadata={
+                        "label_policy": label_policy,
+                        "label_mode": label_mode,
+                        "decision_policy": baseline_decision_policy,
+                        "pipeline_metadata": pipeline_metadata,
+                        "schema_contract": feature_metadata.get("schema_contract", {}),
+                        "interaction_context": feature_metadata.get("interaction_context", {}),
+                        "training_profile": runtime_config["training_profile"],
+                        "resource_config": evaluation_summary["resource_config"],
+                    }
+                )
+                baseline_predictor.cleanup(keep_best_only=True)
+            _dump_json(output_dir / "pipeline_metadata.json", pipeline_metadata)
         else:
-            predictor.cleanup(keep_best_only=True)
+            predictor.save(
+                extra_metadata={
+                    "label_policy": label_policy,
+                    "label_mode": label_mode,
+                    "decision_policy": decision_policy,
+                    "model_comparison": comparison_config,
+                    "pipeline_metadata": pipeline_metadata,
+                    "schema_contract": feature_metadata.get("schema_contract", {}),
+                    "interaction_context": feature_metadata.get("interaction_context", {}),
+                    "training_profile": runtime_config["training_profile"],
+                    "resource_config": evaluation_summary["resource_config"],
+                }
+            )
+            if comparison_config["enabled"]:
+                predictor.cleanup(
+                    keep_best_only=False,
+                    keep_model_names=comparison_config.get("comparison_model_names"),
+                )
+            else:
+                predictor.cleanup(keep_best_only=True)
 
         core_completed_at = get_local_now()
         feature_metadata["artifact_status"] = _build_artifact_status(
@@ -695,67 +984,70 @@ def main():
 
         logger.info("开始生成补充产物...")
 
-        try:
-            leaderboard_df = predictor.get_leaderboard(test_df, silent=True)
-            leaderboard_df.to_csv(output_dir / "leaderboard.csv", index=False, encoding="utf-8-sig")
-        except Exception as e:
-            logger.warning(f"生成 leaderboard 失败: {e}", exc_info=True)
-            _append_failure_once(supplemental_failures, "leaderboard")
+        if pipeline_mode == "two_stage":
+            logger.info("两阶段主流程暂不生成单模型 leaderboard/feature_importance/topk，避免将 stage1 误表述为整条 pipeline 解释。")
+        else:
+            try:
+                leaderboard_df = predictor.get_leaderboard(test_df, silent=True)
+                leaderboard_df.to_csv(output_dir / "leaderboard.csv", index=False, encoding="utf-8-sig")
+            except Exception as e:
+                logger.warning(f"生成 leaderboard 失败: {e}", exc_info=True)
+                _append_failure_once(supplemental_failures, "leaderboard")
 
-        try:
-            logger.info("计算特征重要性...")
-            importance_df = predictor.get_feature_importance(test_df)
-            importance_df.to_csv(output_dir / "feature_importance.csv", index=False, encoding="utf-8-sig")
-            importance_df.to_json(output_dir / "feature_importance.json", orient="records", force_ascii=False, indent=2)
+            try:
+                logger.info("计算特征重要性...")
+                importance_df = predictor.get_feature_importance(test_df)
+                importance_df.to_csv(output_dir / "feature_importance.csv", index=False, encoding="utf-8-sig")
+                importance_df.to_json(output_dir / "feature_importance.json", orient="records", force_ascii=False, indent=2)
 
-            feature_importance_dict = dict(zip(importance_df["feature"], importance_df["importance"]))
-            dimension_contribution = calculate_dimension_contribution(feature_importance_dict)
+                feature_importance_dict = dict(zip(importance_df["feature"], importance_df["importance"]))
+                dimension_contribution = calculate_dimension_contribution(feature_importance_dict)
 
-            logger.info("业务维度贡献分析:")
-            for dim, score in dimension_contribution.items():
-                logger.info(f"  - {dim}: {score:.4f}")
+                logger.info("业务维度贡献分析:")
+                for dim, score in dimension_contribution.items():
+                    logger.info(f"  - {dim}: {score:.4f}")
 
-            with open(output_dir / "business_dimension_contribution.json", "w", encoding="utf-8") as f:
-                json.dump(dimension_contribution, f, ensure_ascii=False, indent=2)
+                with open(output_dir / "business_dimension_contribution.json", "w", encoding="utf-8") as f:
+                    json.dump(dimension_contribution, f, ensure_ascii=False, indent=2)
 
-            if generate_plots:
-                try:
-                    plot_feature_importance(
-                        importance_df,
-                        output_path=str(output_dir / "feature_importance.png")
-                    )
-                    plot_dimension_contribution(
-                        dimension_contribution,
-                        output_path=str(output_dir / "business_dimension_contribution.png")
-                    )
-                except Exception as e:
-                    logger.warning(f"生成解释性 PNG 图表失败: {e}", exc_info=True)
-                    _append_failure_once(supplemental_failures, "plots")
-            else:
-                logger.info("已跳过解释性 PNG 图表生成（generate_plots=false）")
-        except Exception as e:
-            logger.warning(f"生成特征重要性/业务维度补充产物失败: {e}", exc_info=True)
-            _append_failure_once(supplemental_failures, "feature_importance")
-            _append_failure_once(supplemental_failures, "business_dimension_contribution")
+                if generate_plots:
+                    try:
+                        plot_feature_importance(
+                            importance_df,
+                            output_path=str(output_dir / "feature_importance.png")
+                        )
+                        plot_dimension_contribution(
+                            dimension_contribution,
+                            output_path=str(output_dir / "business_dimension_contribution.png")
+                        )
+                    except Exception as e:
+                        logger.warning(f"生成解释性 PNG 图表失败: {e}", exc_info=True)
+                        _append_failure_once(supplemental_failures, "plots")
+                else:
+                    logger.info("已跳过解释性 PNG 图表生成（generate_plots=false）")
+            except Exception as e:
+                logger.warning(f"生成特征重要性/业务维度补充产物失败: {e}", exc_info=True)
+                _append_failure_once(supplemental_failures, "feature_importance")
+                _append_failure_once(supplemental_failures, "business_dimension_contribution")
 
-        try:
-            from scripts.generate_topk import generate_topk_from_predictor
-            topk_output_prefix = Path(config.output.topk_dir) / f"topk_ohab_{get_timestamp()}"
-            generated_topk_files = generate_topk_from_predictor(
-                predictor,
-                test_df,
-                output_path=str(topk_output_prefix),
-                target_class="H",
-                id_column="线索唯一ID",
-                k_values=(100, 500, 1000),
-            )
-            logger.info(
-                "Top-K 列表已生成: %s",
-                ", ".join(str(path) for path in generated_topk_files),
-            )
-        except Exception as e:
-            logger.warning(f"生成 Top-K 列表失败: {e}", exc_info=True)
-            _append_failure_once(supplemental_failures, "topk")
+            try:
+                from scripts.generate_topk import generate_topk_from_predictor
+                topk_output_prefix = Path(config.output.topk_dir) / f"topk_ohab_{get_timestamp()}"
+                generated_topk_files = generate_topk_from_predictor(
+                    predictor,
+                    test_df,
+                    output_path=str(topk_output_prefix),
+                    target_class="H",
+                    id_column="线索唯一ID",
+                    k_values=(100, 500, 1000),
+                )
+                logger.info(
+                    "Top-K 列表已生成: %s",
+                    ", ".join(str(path) for path in generated_topk_files),
+                )
+            except Exception as e:
+                logger.warning(f"生成 Top-K 列表失败: {e}", exc_info=True)
+                _append_failure_once(supplemental_failures, "topk")
 
         if supplemental_failures:
             logger.warning(

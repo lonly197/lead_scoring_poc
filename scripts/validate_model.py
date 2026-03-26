@@ -28,8 +28,16 @@ project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
 from config.config import config, get_excluded_columns
+from src.data.feature_screening import apply_screening_report
 from src.data.label_policy import apply_ohab_label_policy, filter_to_effective_ohab_labels
 from src.data.loader import DataLoader, FeatureEngineer
+from src.evaluation.comparison import build_comparator_bundle
+from src.models.predictor import LeadScoringPredictor
+from src.evaluation.scorecard import (
+    build_trimmed_scorecard_probability_frame,
+    score_trimmed_hab_scorecard,
+)
+from src.training.hab_pipeline import combine_stage_predictions
 from src.evaluation.business_logic import build_bucket_summary_text, build_lead_action_record
 from src.evaluation.ohab_metrics import (
     apply_hab_decision_policy,
@@ -77,6 +85,10 @@ def validate_model_artifacts(metadata: dict, model_path: Path) -> None:
             "请重新运行 train_ohab.py，等待核心产物全部写出后再执行 validate_model.py。"
         )
 
+    pipeline_metadata = metadata.get("pipeline_metadata", {})
+    if pipeline_metadata.get("pipeline_mode") == "two_stage":
+        return
+
     comparison_expected = bool(artifact_status.get("comparison_expected"))
     comparison_config = metadata.get("model_comparison", {})
     comparison_models = (
@@ -101,6 +113,7 @@ FINAL_ORDERED_COLUMN = "is_final_ordered"
 ROLE_DISPLAY = {
     "baseline": "基线模型",
     "best": "最优模型",
+    "scorecard": "评分卡基线",
 }
 
 
@@ -275,6 +288,30 @@ def run_model_predictions(
     return y_pred, y_proba
 
 
+def _select_probability_column(proba_df: pd.DataFrame, preferred_label: str) -> pd.Series:
+    if preferred_label in proba_df.columns:
+        return pd.to_numeric(proba_df[preferred_label], errors="coerce").fillna(0.0)
+    string_mapping = {str(column): column for column in proba_df.columns}
+    if preferred_label in string_mapping:
+        return pd.to_numeric(proba_df[string_mapping[preferred_label]], errors="coerce").fillna(0.0)
+    raise ValueError(f"预测概率中缺少目标列: {preferred_label}")
+
+
+def _save_bundle_outputs(output_dir: Path, suffix: str, bundle: dict) -> None:
+    bundle["results_df"].to_csv(output_dir / f"predictions_{suffix}.csv", index=False, encoding="utf-8-sig")
+    bundle["confusion_df"].to_csv(output_dir / f"confusion_matrix_{suffix}.csv", encoding="utf-8-sig")
+    dump_json(output_dir / f"classification_report_{suffix}.json", bundle["classification_dict"])
+    dump_json(output_dir / f"class_ranking_report_{suffix}.json", bundle["class_ranking_report"])
+    if bundle["b_threshold_report"] is not None:
+        bundle["b_threshold_report"].to_csv(output_dir / f"b_threshold_report_{suffix}.csv", index=False, encoding="utf-8-sig")
+    if not bundle["bucket_summary_df"].empty:
+        bundle["bucket_summary_df"].to_csv(output_dir / f"hab_bucket_summary_{suffix}.csv", index=False, encoding="utf-8-sig")
+        dump_json(output_dir / f"hab_bucket_summary_{suffix}.json", bundle["bucket_summary_df"].to_dict(orient="records"))
+        dump_json(output_dir / f"monotonicity_check_{suffix}.json", bundle["monotonicity_result"])
+    if not bundle["lead_actions_df"].empty:
+        bundle["lead_actions_df"].to_csv(output_dir / f"lead_actions_{suffix}.csv", index=False, encoding="utf-8-sig")
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description="验证 OHAB 模型")
 
@@ -438,12 +475,16 @@ def find_available_model(default_path: Path) -> Path:
         # 优先级：ohab_model > ohab_oot > 其他
         for name in ["ohab_model", "ohab_oot"]:
             candidate = models_dir / name
-            if candidate.exists() and (candidate / "predictor.pkl").exists():
+            if candidate.exists() and (
+                (candidate / "predictor.pkl").exists() or (candidate / "pipeline_metadata.json").exists()
+            ):
                 return candidate
 
         # 查找其他有效模型目录
         for model_dir in models_dir.iterdir():
-            if model_dir.is_dir() and (model_dir / "predictor.pkl").exists():
+            if model_dir.is_dir() and (
+                (model_dir / "predictor.pkl").exists() or (model_dir / "pipeline_metadata.json").exists()
+            ):
                 return model_dir
 
     return default_path  # 返回默认路径，让后续代码报错
@@ -519,12 +560,30 @@ def main():
         logger.info("加载模型")
         logger.info("=" * 60)
 
-        predictor = load_model(model_path)
-        logger.info(f"模型加载完成: {model_path}")
-        logger.info(f"标签: {predictor.label}")
-        logger.info(f"评估指标: {predictor.eval_metric}")
-        logger.info(f"问题类型: {predictor.problem_type}")
-        logger.info(f"最佳模型: {predictor.model_best}")
+        pipeline_metadata = metadata.get("pipeline_metadata", {})
+        pipeline_mode = pipeline_metadata.get("pipeline_mode", "single_stage")
+        baseline_predictor = None
+        baseline_model_name = None
+        baseline_policy = {"strategy": "argmax"}
+        if pipeline_mode == "two_stage":
+            stage1_predictor = LeadScoringPredictor.load(pipeline_metadata["stage1_model_dir"])
+            stage2_predictor = LeadScoringPredictor.load(pipeline_metadata["stage2_model_dir"])
+            predictor = None
+            comparison_config = metadata.get("model_comparison", {"enabled": False})
+            baseline_cfg = comparison_config.get("models", {}).get("gbdt_baseline", {}) if isinstance(comparison_config, dict) else {}
+            baseline_model_dir = baseline_cfg.get("model_dir")
+            baseline_model_name = baseline_cfg.get("model_name")
+            baseline_policy = baseline_cfg.get("decision_policy", {"strategy": "argmax"})
+            if baseline_model_dir:
+                baseline_predictor = LeadScoringPredictor.load(baseline_model_dir)
+            logger.info(f"两阶段模型加载完成: {model_path}")
+        else:
+            predictor = load_model(model_path)
+            logger.info(f"模型加载完成: {model_path}")
+            logger.info(f"标签: {predictor.label}")
+            logger.info(f"评估指标: {predictor.eval_metric}")
+            logger.info(f"问题类型: {predictor.problem_type}")
+            logger.info(f"最佳模型: {predictor.model_best}")
 
         # 2. 加载测试数据
         logger.info("\n" + "=" * 60)
@@ -535,7 +594,7 @@ def main():
         df = loader.load()
 
         # 过滤 Unknown
-        target = predictor.label
+        target = args.target if pipeline_mode == "two_stage" else predictor.label
         if target in df.columns:
             df = df[df[target] != "Unknown"].copy()
             logger.info(f"过滤 Unknown 后: {len(df)} 行")
@@ -547,6 +606,7 @@ def main():
         interaction_context = metadata.get("interaction_context", {})
         decision_policy = metadata.get("decision_policy", {"strategy": "argmax"})
         comparison_config = metadata.get("model_comparison", {"enabled": False})
+        screening_report = metadata.get("screening_report", {})
     
         if split_info:
             logger.info(f"读取到模型切分元数据，模式: {split_info.get('mode')}")
@@ -613,6 +673,9 @@ def main():
             df = filter_to_effective_ohab_labels(df, target, label_policy)
             logger.info(f"应用训练标签策略: {label_policy}")
 
+        if screening_report:
+            df = apply_screening_report(df, screening_report)
+
         business_metric_columns = [
             "到店标签_7天",
             "到店标签_14天",
@@ -658,10 +721,10 @@ def main():
             matthews_corrcoef,
         )
 
-        if comparison_config.get("enabled") and comparison_config.get("models"):
+        if comparison_config.get("enabled") and comparison_config.get("models") and pipeline_mode != "two_stage":
             model_specs = list(comparison_config["models"].items())
         else:
-            model_specs = [
+            model_specs = [] if pipeline_mode == "two_stage" else [
                 (
                     predictor.model_best,
                     {
@@ -674,6 +737,60 @@ def main():
         comparison_rows = []
         per_model_outputs = {}
 
+        if pipeline_mode == "two_stage":
+            stage1_proba = stage1_predictor.predict_proba(df_processed).reset_index(drop=True)
+            stage2_proba = stage2_predictor.predict_proba(df_processed).reset_index(drop=True)
+            pipeline_pred, pipeline_proba = combine_stage_predictions(
+                stage1_h_proba=_select_probability_column(stage1_proba, "H"),
+                stage2_ab_proba=stage2_proba,
+                h_threshold=float(decision_policy.get("h_threshold", 0.5)),
+            )
+            pipeline_bundle = build_comparator_bundle(
+                comparator_name="two_stage_pipeline",
+                role="best",
+                y_true=y_true,
+                y_pred=pipeline_pred,
+                y_proba=pipeline_proba,
+                df_processed=df_processed,
+                business_metric_frame=business_metric_frame,
+                business_metric_columns=business_metric_columns,
+                top_ratios=top_ratios,
+                label_mode=label_mode,
+                final_ordered=final_ordered,
+                decision_policy=decision_policy,
+            )
+            pipeline_bundle["comparison_row"]["模型角色"] = ROLE_DISPLAY["best"]
+            comparison_rows.append(pipeline_bundle["comparison_row"])
+            per_model_outputs["best"] = pipeline_bundle
+            _save_bundle_outputs(output_dir, "best", pipeline_bundle)
+
+            if baseline_predictor is not None:
+                baseline_pred, baseline_proba = run_model_predictions(
+                    predictor=baseline_predictor,
+                    data=df_processed,
+                    label_mode=label_mode,
+                    decision_policy=baseline_policy,
+                    model_name=baseline_model_name,
+                )
+                baseline_bundle = build_comparator_bundle(
+                    comparator_name=baseline_model_name or "gbdt_baseline",
+                    role="baseline",
+                    y_true=y_true,
+                    y_pred=baseline_pred,
+                    y_proba=baseline_proba,
+                    df_processed=df_processed,
+                    business_metric_frame=business_metric_frame,
+                    business_metric_columns=business_metric_columns,
+                    top_ratios=top_ratios,
+                    label_mode=label_mode,
+                    final_ordered=final_ordered,
+                    decision_policy=baseline_policy,
+                )
+                baseline_bundle["comparison_row"]["模型角色"] = ROLE_DISPLAY["baseline"]
+                comparison_rows.append(baseline_bundle["comparison_row"])
+                per_model_outputs["baseline"] = baseline_bundle
+                _save_bundle_outputs(output_dir, "baseline", baseline_bundle)
+
         for model_name, model_cfg in model_specs:
             role = model_cfg.get("role", model_name)
             current_policy = model_cfg.get("decision_policy", decision_policy)
@@ -684,116 +801,51 @@ def main():
                 decision_policy=current_policy,
                 model_name=model_name,
             )
+            model_bundle = build_comparator_bundle(
+                comparator_name=model_name,
+                role=role,
+                y_true=y_true,
+                y_pred=y_pred,
+                y_proba=y_proba,
+                df_processed=df_processed,
+                business_metric_frame=business_metric_frame,
+                business_metric_columns=business_metric_columns,
+                top_ratios=top_ratios,
+                label_mode=label_mode,
+                final_ordered=final_ordered,
+                decision_policy=current_policy,
+            )
+            model_bundle["comparison_row"]["模型角色"] = ROLE_DISPLAY.get(role, role)
+            comparison_rows.append(model_bundle["comparison_row"])
+            per_model_outputs[role] = model_bundle
+            _save_bundle_outputs(output_dir, role, model_bundle)
 
-            accuracy = accuracy_score(y_true, y_pred)
-            balanced_acc = balanced_accuracy_score(y_true, y_pred)
-            mcc = matthews_corrcoef(y_true, y_pred)
-            cm = confusion_matrix(y_true, y_pred)
-            report = classification_report_text(y_true, y_pred)
-            confusion_df = confusion_matrix_frame(y_true, y_pred)
-            classification_dict = classification_report_dict(y_true, y_pred)
-            class_ranking_report = compute_class_ranking_report(y_true, y_proba, top_ratios=top_ratios)
-            b_threshold_report = None
-            if "B" in y_proba.columns:
-                b_threshold_report = compute_threshold_report(y_true, y_proba["B"], positive_label="B")
-
-            results_df = pd.DataFrame({
-                "真实标签": y_true,
-                "预测标签": y_pred.values if hasattr(y_pred, "values") else y_pred,
-            })
-            if final_ordered is not None:
-                final_ordered = final_ordered.loc[df_processed.index].fillna(0).astype(int)
-                results_df["实际下定"] = final_ordered.values
-            for col in y_proba.columns:
-                results_df[f"概率_{col}"] = y_proba[col].values
-
-            bucket_summary_df = pd.DataFrame()
-            monotonicity_result = {"passed": False, "metric": None, "message": "未启用 HAB 桶验证"}
-            lead_actions_df = pd.DataFrame()
-            business_kpis = {
-                "overall_arrive_14d_rate": 0.0,
-                "overall_drive_14d_rate": 0.0,
-                "h_arrive_14d_rate": 0.0,
-                "a_arrive_14d_rate": 0.0,
-                "b_arrive_14d_rate": 0.0,
-                "h_drive_14d_rate": 0.0,
-                "a_drive_14d_rate": 0.0,
-                "b_drive_14d_rate": 0.0,
-                "h_arrive_lift": 0.0,
-                "h_drive_lift": 0.0,
-                "ha_arrive_capture": 0.0,
-                "ha_drive_capture": 0.0,
-                "b_bucket_share": 0.0,
-                "client_layering_message": "POC 已验证建模与 SOP 联动可行，分层边界仍需结合更多行为特征继续校准",
-                "arrive_monotonic": None,
-                "drive_monotonic": None,
-            }
-            if label_mode == "hab":
-                bucket_input_df = pd.DataFrame({
-                    "预测标签": y_pred.values if hasattr(y_pred, "values") else y_pred,
-                    "真实标签": y_true,
-                })
-                for metric_column in business_metric_columns:
-                    if metric_column in business_metric_frame.columns:
-                        bucket_input_df[metric_column] = business_metric_frame.loc[df_processed.index, metric_column].values
-                bucket_summary_df = compute_hab_bucket_summary(bucket_input_df, label_column="预测标签")
-                monotonicity_result = check_hab_monotonicity(bucket_summary_df)
-                business_kpis = compute_business_kpis(bucket_input_df, bucket_summary_df)
-
-                lead_action_rows = []
-                for idx, row in df_processed.reset_index(drop=True).iterrows():
-                    probability_map = {label: float(y_proba.iloc[idx].get(label, 0.0)) for label in y_proba.columns}
-                    lead_action_rows.append(
-                        build_lead_action_record(
-                            row=row,
-                            predicted_label=str(y_pred.iloc[idx] if hasattr(y_pred, "iloc") else y_pred[idx]),
-                            probability_map=probability_map,
-                        )
-                    )
-                lead_actions_df = pd.DataFrame(lead_action_rows)
-
-            suffix = role
-            results_df.to_csv(output_dir / f"predictions_{suffix}.csv", index=False, encoding="utf-8-sig")
-            confusion_df.to_csv(output_dir / f"confusion_matrix_{suffix}.csv", encoding="utf-8-sig")
-            dump_json(output_dir / f"classification_report_{suffix}.json", classification_dict)
-            dump_json(output_dir / f"class_ranking_report_{suffix}.json", class_ranking_report)
-            if b_threshold_report is not None:
-                b_threshold_report.to_csv(output_dir / f"b_threshold_report_{suffix}.csv", index=False, encoding="utf-8-sig")
-            if not bucket_summary_df.empty:
-                bucket_summary_df.to_csv(output_dir / f"hab_bucket_summary_{suffix}.csv", index=False, encoding="utf-8-sig")
-                dump_json(output_dir / f"hab_bucket_summary_{suffix}.json", bucket_summary_df.to_dict(orient="records"))
-                dump_json(output_dir / f"monotonicity_check_{suffix}.json", monotonicity_result)
-            if not lead_actions_df.empty:
-                lead_actions_df.to_csv(output_dir / f"lead_actions_{suffix}.csv", index=False, encoding="utf-8-sig")
-
-            comparison_row = {
-                "model_name": model_name,
-                "role": role,
-                "模型角色": ROLE_DISPLAY.get(role, role),
-                "accuracy": float(accuracy),
-                "balanced_accuracy": float(balanced_acc),
-                "mcc": float(mcc),
-                "macro_f1": float(classification_dict.get("macro avg", {}).get("f1-score", 0.0)),
-                "b_recall": float(classification_dict.get("B", {}).get("recall", 0.0)),
-                "monotonicity_passed": bool(monotonicity_result.get("passed", False)),
-                "monotonicity_metric": monotonicity_result.get("metric"),
-                **business_kpis,
-            }
-            comparison_rows.append(comparison_row)
-            per_model_outputs[role] = {
-                "model_name": model_name,
-                "decision_policy": current_policy,
-                "results_df": results_df,
-                "confusion_df": confusion_df,
-                "classification_dict": classification_dict,
-                "class_ranking_report": class_ranking_report,
-                "bucket_summary_df": bucket_summary_df,
-                "monotonicity_result": monotonicity_result,
-                "lead_actions_df": lead_actions_df,
-                "business_kpis": business_kpis,
-                "report": report,
-                "cm": cm,
-            }
+        scorecard_frame = score_trimmed_hab_scorecard(df_processed.reset_index(drop=True))
+        scorecard_pred = scorecard_frame["预测标签"]
+        scorecard_proba = build_trimmed_scorecard_probability_frame(scorecard_frame["总分"])
+        scorecard_bundle = build_comparator_bundle(
+            comparator_name="scorecard_5d_trimmed",
+            role="scorecard",
+            y_true=y_true,
+            y_pred=scorecard_pred,
+            y_proba=scorecard_proba,
+            df_processed=df_processed,
+            business_metric_frame=business_metric_frame,
+            business_metric_columns=business_metric_columns,
+            top_ratios=top_ratios,
+            label_mode=label_mode,
+            final_ordered=final_ordered,
+            decision_policy={"strategy": "trimmed_scorecard_v1"},
+        )
+        scorecard_bundle["results_df"] = pd.concat(
+            [scorecard_bundle["results_df"], scorecard_frame.reset_index(drop=True)],
+            axis=1,
+        )
+        scorecard_bundle["comparison_row"]["模型角色"] = ROLE_DISPLAY["scorecard"]
+        scorecard_bundle["comparison_row"]["scorecard_coverage_mean"] = float(scorecard_frame["字段覆盖率"].mean())
+        comparison_rows.append(scorecard_bundle["comparison_row"])
+        per_model_outputs["scorecard"] = scorecard_bundle
+        _save_bundle_outputs(output_dir, "scorecard", scorecard_bundle)
 
         comparison_df = pd.DataFrame(comparison_rows)
         if not comparison_df.empty:
@@ -814,7 +866,7 @@ def main():
         primary_row, selection_reason = select_business_recommended_row(comparison_df)
         primary_role = str(primary_row["role"])
         primary_output = per_model_outputs[primary_role]
-        technical_best_model = predictor.model_best
+        technical_best_model = "two_stage_pipeline" if pipeline_mode == "two_stage" else predictor.model_best
         business_recommended_model = primary_output["model_name"]
 
         primary_output["results_df"].to_csv(output_dir / "predictions.csv", index=False, encoding="utf-8-sig")

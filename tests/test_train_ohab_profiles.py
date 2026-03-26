@@ -21,6 +21,11 @@ def _make_args(**overrides):
         exclude_memory_heavy_models=None,
         num_folds_parallel=None,
         max_memory_ratio=None,
+        split_mode=None,
+        auto_oot_min_days=None,
+        pipeline_mode=None,
+        split_group_mode=None,
+        feature_profile=None,
     )
     defaults.update(overrides)
     return types.SimpleNamespace(**defaults)
@@ -49,7 +54,7 @@ def test_resolve_training_config_uses_server_16g_compare_defaults(monkeypatch):
     assert resolved["training_profile"] == "server_16g_compare"
     assert resolved["preset"] == "good_quality"
     assert resolved["time_limit"] == 5400
-    assert resolved["eval_metric"] == "log_loss"
+    assert resolved["eval_metric"] == "balanced_accuracy"
     assert resolved["num_bag_folds"] == 3
     assert resolved["enable_model_comparison"] is True
     assert resolved["baseline_family"] == "gbm"
@@ -58,6 +63,11 @@ def test_resolve_training_config_uses_server_16g_compare_defaults(monkeypatch):
     assert resolved["fit_strategy"] == "sequential"
     assert resolved["num_folds_parallel"] == 1
     assert resolved["excluded_model_types"] == ["RF", "XT", "KNN", "FASTAI", "NN_TORCH"]
+    assert resolved["split_mode"] == "random"
+    assert resolved["auto_oot_min_days"] == 90
+    assert resolved["pipeline_mode"] == "two_stage"
+    assert resolved["split_group_mode"] == "phone_or_lead"
+    assert resolved["feature_profile"] == "auto_scorecard"
     assert resolved["resource_tuning"]["memory_limit_source"] == "auto"
     assert resolved["resource_tuning"]["num_folds_parallel_source"] == "auto"
 
