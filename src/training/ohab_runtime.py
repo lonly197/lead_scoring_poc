@@ -313,8 +313,10 @@ def build_resource_plan(
         if effective_preset != "medium_quality":
             effective_preset = "medium_quality"
         effective_enable_model_comparison = False
-        if effective_max_memory_ratio is None or effective_max_memory_ratio < 0.85:
+        if effective_max_memory_ratio is None:
             effective_max_memory_ratio = 0.85
+        # 如果用户明确指定了值，保留用户选择，即使较低
+        # 自动降级不应覆盖用户的显式配置
 
     return {
         "should_degrade": should_degrade,
