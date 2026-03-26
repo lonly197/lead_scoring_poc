@@ -88,8 +88,7 @@ def run_background(script_path: str, args: list[str], log_dir: str = "./outputs/
     task_name = Path(script_path).stem
     log_file = log_dir_path / f"{task_name}_{timestamp}.log"
 
-    passthrough_args = [arg for arg in args if arg not in {"--daemon", "-d"}]
-    cmd = [sys.executable, script_path] + passthrough_args + ["--log-file", str(log_file)]
+    cmd = [sys.executable, script_path] + args + ["--log-file", str(log_file)]
     cmd_str = " ".join(cmd)
 
     print(f"启动后台任务: {task_name}")
@@ -145,7 +144,20 @@ def main() -> int:
     parser = build_parser()
     args, pass_args = parser.parse_known_args()
     raw_args = sys.argv[1:]
-    forwarded_args = [arg for arg in raw_args if arg not in {"--daemon", "-d"}]
+
+    # 过滤掉统一入口的专用参数，不传递给子脚本
+    forwarded_args = []
+    skip_next = False
+    for arg in raw_args:
+        if skip_next:
+            skip_next = False
+            continue
+        if arg in {"--daemon", "-d"}:
+            continue
+        if arg == "--model-type":
+            skip_next = True  # 跳过 --model-type 的值
+            continue
+        forwarded_args.append(arg)
 
     script_path = resolve_validator_script(args)
     if args.daemon:
