@@ -159,7 +159,10 @@ def main():
             if args.follow:
                 import subprocess
 
-                subprocess.run(["tail", "-f", info["log_file"]])
+                try:
+                    subprocess.run(["tail", "-f", info["log_file"]])
+                except KeyboardInterrupt:
+                    print("\n\n日志跟踪已停止")
             else:
                 tail_log(info["log_file"], args.lines)
         else:
