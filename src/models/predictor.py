@@ -7,6 +7,7 @@ AutoML 模型封装模块
 import inspect
 import json
 import logging
+import pickle
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
@@ -14,6 +15,7 @@ import numpy as np
 import pandas as pd
 
 logger = logging.getLogger(__name__)
+CUSTOM_METADATA_FILENAME = "predictor_metadata.json"
 
 
 def _hook_params_without_self(method) -> list[inspect.Parameter]:
@@ -679,7 +681,7 @@ class LeadScoringPredictor:
         if merged_extra_metadata:
             metadata["extra_metadata"] = merged_extra_metadata
 
-        metadata_path = save_path / "metadata.json"
+        metadata_path = save_path / CUSTOM_METADATA_FILENAME
         with open(metadata_path, "w", encoding="utf-8") as f:
             json.dump(metadata, f, ensure_ascii=False, indent=2)
 
@@ -700,17 +702,8 @@ class LeadScoringPredictor:
 
         load_path = Path(path)
 
-        # 加载元数据
-        metadata_path = load_path / "metadata.json"
-        if metadata_path.exists():
-            with open(metadata_path, encoding="utf-8") as f:
-                metadata = json.load(f)
-        else:
-            # 从底层 predictor 推断
-            metadata = {}
-
-        # 加载底层 predictor（跳过版本检查以避免兼容性问题）
-        predictor = TabularPredictor.load(str(load_path), require_version_match=False)
+        metadata = cls._load_custom_metadata(load_path)
+        predictor = cls._load_autogluon_predictor(load_path)
 
         feature_columns = metadata.get("feature_columns")
         if not feature_columns:
@@ -738,6 +731,50 @@ class LeadScoringPredictor:
             logger.info(f"已恢复 {len(instance._feature_columns)} 个训练特征列")
 
         return instance
+
+    @staticmethod
+    def _load_custom_metadata(load_path: Path) -> Dict[str, Any]:
+        metadata_path = load_path / CUSTOM_METADATA_FILENAME
+        if metadata_path.exists():
+            with open(metadata_path, encoding="utf-8") as f:
+                return json.load(f)
+
+        legacy_metadata_path = load_path / "metadata.json"
+        if legacy_metadata_path.exists():
+            with open(legacy_metadata_path, encoding="utf-8") as f:
+                legacy_metadata = json.load(f)
+            if isinstance(legacy_metadata, dict) and "py_version" not in legacy_metadata:
+                return legacy_metadata
+
+        return {}
+
+    @staticmethod
+    def _load_autogluon_predictor(load_path: Path):
+        from autogluon.tabular import TabularPredictor
+
+        load_kwargs = [
+            {"require_version_match": False, "require_py_version_match": False},
+            {"require_version_match": False},
+            {},
+        ]
+        last_error: Optional[Exception] = None
+        for kwargs in load_kwargs:
+            try:
+                return TabularPredictor.load(str(load_path), **kwargs)
+            except TypeError as exc:
+                last_error = exc
+                continue
+            except Exception as exc:
+                last_error = exc
+                logger.warning("标准加载失败(%s): %s", kwargs, exc)
+
+        predictor_path = load_path / "predictor.pkl"
+        if predictor_path.exists():
+            logger.warning("回退使用 predictor.pkl 加载模型: %s", predictor_path)
+            with open(predictor_path, "rb") as f:
+                return pickle.load(f)
+
+        raise RuntimeError(f"无法加载模型: {load_path}") from last_error
 
     def get_model_info(self) -> Dict[str, Any]:
         """

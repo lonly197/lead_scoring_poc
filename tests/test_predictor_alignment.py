@@ -138,7 +138,12 @@ class FakeTabularPredictor:
         return None
 
     @classmethod
-    def load(cls, path, require_version_match=False):
+    def load(
+        cls,
+        path,
+        require_version_match=False,
+        require_py_version_match=False,
+    ):
         return cls.load_return
 
 
@@ -252,8 +257,9 @@ def test_load_restores_feature_columns_and_aligns_predict_proba(monkeypatch, tmp
     predictor._feature_columns = ["feat_a", "feat_b"]
     predictor.save(str(model_dir))
 
-    metadata = json.loads((model_dir / "metadata.json").read_text(encoding="utf-8"))
+    metadata = json.loads((model_dir / "predictor_metadata.json").read_text(encoding="utf-8"))
     assert metadata["feature_columns"] == ["feat_a", "feat_b"]
+    assert not (model_dir / "metadata.json").exists()
 
     FakeTabularPredictor.load_return = FakeTabularPredictor(
         label="label",
@@ -275,6 +281,36 @@ def test_load_restores_feature_columns_and_aligns_predict_proba(monkeypatch, tmp
 
     assert loaded_predictor._feature_columns == ["feat_a", "feat_b"]
     assert FakeTabularPredictor.load_return.last_predict_proba_columns == ["feat_a", "feat_b"]
+
+
+def test_load_uses_legacy_metadata_json_without_breaking_autogluon(monkeypatch, tmp_path):
+    install_fake_autogluon(monkeypatch)
+
+    model_dir = tmp_path / "legacy_model"
+    model_dir.mkdir()
+    legacy_metadata = {
+        "label": "label",
+        "eval_metric": "balanced_accuracy",
+        "problem_type": "multiclass",
+        "feature_columns": ["feat_a", "feat_b"],
+    }
+    (model_dir / "metadata.json").write_text(
+        json.dumps(legacy_metadata, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    FakeTabularPredictor.load_return = FakeTabularPredictor(
+        label="label",
+        eval_metric="roc_auc",
+        problem_type="binary",
+        path=str(model_dir),
+    )
+
+    loaded_predictor = LeadScoringPredictor.load(str(model_dir))
+
+    assert loaded_predictor.eval_metric == "balanced_accuracy"
+    assert loaded_predictor.problem_type == "multiclass"
+    assert loaded_predictor._feature_columns == ["feat_a", "feat_b"]
 
 
 def test_predict_proba_passes_explicit_model_name(monkeypatch, tmp_path):
