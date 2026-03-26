@@ -530,8 +530,14 @@ class FeatureEngineer:
             )
             new_features.extend(['AI语义标签可用', '语义标签命中数'])
 
-        if '跟进详情_JSON' in df.columns:
-            json_series = df['跟进详情_JSON']
+        json_detail_column = None
+        if '非首触跟进记录' in df.columns:
+            json_detail_column = '非首触跟进记录'
+        elif '跟进详情_JSON' in df.columns:
+            json_detail_column = '跟进详情_JSON'
+
+        if json_detail_column:
+            json_series = df[json_detail_column]
             df['JSON跟进明细可用'] = (
                 json_series.notna() &
                 json_series.astype(str).str.strip().ne("") &
