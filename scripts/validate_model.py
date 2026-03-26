@@ -26,6 +26,7 @@ from src.utils.helpers import format_timestamp, get_local_now, get_timestamp
 VALIDATOR_SCRIPTS = {
     "ohab": "validate_ohab_model.py",
     "arrive": "validate_arrive_model.py",
+    "test_drive": "validate_test_drive_model.py",
 }
 
 
@@ -41,6 +42,8 @@ def infer_model_type_from_path(model_path: Path) -> str | None:
     model_name = model_path.name.lower()
     if "arrive" in model_name:
         return "arrive"
+    if "test_drive" in model_name or "drive" in model_name:
+        return "test_drive"
     if "ohab" in model_name or "hab" in model_name:
         return "ohab"
     return None
@@ -55,6 +58,8 @@ def infer_model_type_from_metadata(model_path: Path) -> str | None:
     label = str(metadata.get("label", ""))
     if label == "到店标签_14天":
         return "arrive"
+    if label == "试驾标签_14天":
+        return "test_drive"
     if label in {"线索评级结果", "线索评级_试驾前"}:
         return "ohab"
     return None
@@ -88,7 +93,20 @@ def run_background(script_path: str, args: list[str], log_dir: str = "./outputs/
     task_name = Path(script_path).stem
     log_file = log_dir_path / f"{task_name}_{timestamp}.log"
 
-    cmd = [sys.executable, script_path] + args + ["--log-file", str(log_file)]
+    forwarded_args = []
+    skip_next = False
+    for arg in args:
+        if skip_next:
+            skip_next = False
+            continue
+        if arg in {"--daemon", "-d"}:
+            continue
+        if arg == "--model-type":
+            skip_next = True
+            continue
+        forwarded_args.append(arg)
+
+    cmd = [sys.executable, script_path] + forwarded_args + ["--log-file", str(log_file)]
     cmd_str = " ".join(cmd)
 
     print(f"启动后台任务: {task_name}")
@@ -127,7 +145,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--daemon", "-d", action="store_true", help="后台运行模式")
     parser.add_argument(
         "--model-type",
-        choices=["ohab", "arrive"],
+        choices=["ohab", "arrive", "test_drive"],
         default=None,
         help="显式指定模型类型；不传则尝试自动识别",
     )

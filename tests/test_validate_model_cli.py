@@ -59,6 +59,7 @@ def test_validate_model_run_background_strips_daemon_and_appends_log_file(monkey
     assert pid == 43210
     assert "--daemon" not in captured["cmd"]
     assert "-d" not in captured["cmd"]
+    assert "--model-type" not in captured["cmd"]
     assert captured["cmd"][-2:] == ["--log-file", "outputs/logs/validate_arrive_model_20260325_120000.log"]
     assert captured["stdout_name"].endswith("outputs/logs/validate_arrive_model_20260325_120000.log")
     assert captured["start_new_session"] is True
@@ -80,7 +81,7 @@ def test_validate_model_main_dispatches_arrive_to_arrive_validator(monkeypatch):
     validate_script.main()
 
     assert captured["script_path"].endswith("scripts/validate_arrive_model.py")
-    assert captured["pass_args"] == ["--model-type", "arrive", "--data-path", "./arrive.tsv"]
+    assert captured["pass_args"] == ["--data-path", "./arrive.tsv"]
 
 
 def test_validate_model_main_dispatches_ohab_to_ohab_validator(monkeypatch):
@@ -98,7 +99,25 @@ def test_validate_model_main_dispatches_ohab_to_ohab_validator(monkeypatch):
     validate_script.main()
 
     assert captured["script_path"].endswith("scripts/validate_ohab_model.py")
-    assert captured["pass_args"] == ["--model-type", "ohab", "--data-path", "./ohab.tsv"]
+    assert captured["pass_args"] == ["--data-path", "./ohab.tsv"]
+
+
+def test_validate_model_main_dispatches_test_drive_to_test_drive_validator(monkeypatch):
+    validate_script = load_validate_entry(monkeypatch)
+    captured = {}
+
+    monkeypatch.setattr(validate_script, "resolve_validator_script", lambda args: "scripts/validate_test_drive_model.py")
+    monkeypatch.setattr(
+        validate_script,
+        "run_foreground",
+        lambda script_path, pass_args: captured.update({"script_path": script_path, "pass_args": pass_args}) or 0,
+    )
+    monkeypatch.setattr(sys, "argv", ["validate_model.py", "--model-type", "test_drive", "--data-path", "./test_drive.tsv"])
+
+    validate_script.main()
+
+    assert captured["script_path"].endswith("scripts/validate_test_drive_model.py")
+    assert captured["pass_args"] == ["--data-path", "./test_drive.tsv"]
 
 
 def test_validate_model_main_uses_background_branch(monkeypatch):
@@ -120,7 +139,7 @@ def test_validate_model_main_uses_background_branch(monkeypatch):
     validate_script.main()
 
     assert captured["script_path"].endswith("scripts/validate_ohab_model.py")
-    assert captured["args"] == ["--model-type", "ohab", "--data-path", "./data/202602~03.tsv"]
+    assert captured["args"] == ["--data-path", "./data/202602~03.tsv"]
 
 
 def test_resolve_validator_script_uses_explicit_model_type(monkeypatch):
@@ -131,3 +150,13 @@ def test_resolve_validator_script_uses_explicit_model_type(monkeypatch):
     )
 
     assert script_path.endswith("scripts/validate_arrive_model.py")
+
+
+def test_resolve_validator_script_uses_test_drive_model_type(monkeypatch):
+    validate_script = load_validate_entry(monkeypatch)
+
+    script_path = validate_script.resolve_validator_script(
+        Namespace(model_type="test_drive", model_path="outputs/models/test_drive_model")
+    )
+
+    assert script_path.endswith("scripts/validate_test_drive_model.py")
