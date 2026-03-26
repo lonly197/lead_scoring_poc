@@ -35,15 +35,18 @@ def setup_chinese_fonts():
     import matplotlib.pyplot as plt
     from matplotlib import font_manager
 
-    # 常见中文字体候选
+    # 按优先级排列的中文字体（优先使用效果好的）
     chinese_fonts = [
-        "PingFang SC",      # macOS
-        "Noto Sans CJK SC", # Linux
+        "Songti SC",        # macOS 宋体
+        "PingFang SC",      # macOS 苹方
+        "Noto Sans CJK SC", # Linux 思源黑体
         "Source Han Sans SC",
         "WenQuanYi Micro Hei",
-        "Microsoft YaHei",  # Windows
-        "SimHei",
-        "Arial Unicode MS",
+        "Microsoft YaHei",  # Windows 微软雅黑
+        "SimHei",           # Windows 黑体
+        "Heiti SC",         # macOS 黑体
+        "STHeiti",
+        "Arial Unicode MS", # 兜底字体（中文支持有限）
     ]
 
     available_fonts = {font.name for font in font_manager.fontManager.ttflist}
