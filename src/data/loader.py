@@ -155,14 +155,14 @@ class FeatureEngineer:
     """特征工程处理器
 
     设计说明：
-    本类仅处理 AutoGluon 不擅长的预处理工作：
-    1. 时间特征提取：AutoGluon 不会自动提取 day_of_week、hour 等衍生特征
+    本类仅处理模型框架不擅长的预处理工作：
+    1. 时间特征提取：框架不会自动提取 day_of_week、hour 等衍生特征
     2. 数值类型转换：确保数值列类型正确
 
-    不处理的内容（交给 AutoGluon 自动处理）：
-    - 类别编码（AutoGluon 内置 CategoryFeatureGenerator）
-    - 缺失值填充（AutoGluon 内置 FillNaFeatureGenerator）
-    - 异常值处理（AutoGluon 的 QuantileTransformer 自动处理偏斜分布）
+    不处理的内容（交给框架自动处理）：
+    - 类别编码（自动识别并处理）
+    - 缺失值填充（自动填充）
+    - 异常值处理（自动变换）
     """
 
     def __init__(
@@ -241,7 +241,7 @@ class FeatureEngineer:
             metadata["interaction_context"] = deepcopy(self.interaction_context)
             logger.info(f"交互特征创建完成: {interaction_features}")
 
-        logger.info("特征工程完成，其余预处理由 AutoGluon 自动处理")
+        logger.info("特征工程完成，其余预处理由模型框架自动处理")
         return df, metadata
 
     def process(
@@ -314,7 +314,7 @@ class FeatureEngineer:
             if col not in df.columns:
                 continue
 
-            # 转换为数值类型（保留 NaN，让 AutoGluon 处理）
+            # 转换为数值类型（保留 NaN，让模型框架处理）
             df[col] = pd.to_numeric(df[col], errors="coerce")
 
         return df

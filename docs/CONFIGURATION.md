@@ -90,7 +90,7 @@ OUTPUT_DIR=./outputs
 | 环境变量 | 说明 | 推荐值 |
 |----------|------|--------|
 | `OHAB_TRAINING_PROFILE` | 训练档位 | `server_16g_compare` |
-| `OHAB_MODEL_PRESET` | AutoGluon 预设 | `good_quality` |
+| `OHAB_MODEL_PRESET` | 模型预设 | `good_quality` |
 | `OHAB_TIME_LIMIT` | 总训练时长（秒） | `5400` |
 | `OHAB_NUM_BAG_FOLDS` | Bagging 折数 | `3` |
 | `OHAB_LABEL_MODE` | 评级模式 | `hab` |

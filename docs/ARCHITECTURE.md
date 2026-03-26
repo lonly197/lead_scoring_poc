@@ -8,27 +8,27 @@
 
 | 组件 | 用途 | 版本 |
 |------|------|------|
-| AutoGluon | 自动化机器学习 | >= 1.2.0 |
+| AutoML 框架 | 自动化机器学习 | AutoGluon >= 1.2.0 |
 | Pandas | 数据处理 | >= 2.0.0 |
 | Scikit-learn | 评估指标 | >= 1.3.0 |
 | Matplotlib/Seaborn | 可视化 | >= 3.7.0 |
-| Ray | 分布式计算后端 | AutoGluon 依赖 |
+| Ray | 分布式计算后端 | 框架依赖 |
 
 ---
 
-## AutoGluon 兼容性说明
+## 模型框架兼容性说明
 
-本项目充分利用 AutoGluon 内置的预处理能力，避免重复处理：
+本项目充分利用 AutoML 框架内置的预处理能力，避免重复处理：
 
 | 功能 | 处理方 | 说明 |
 |------|--------|------|
-| 类别编码 | AutoGluon | `CategoryFeatureGenerator` 自动处理 |
-| 缺失值填充 | AutoGluon | `FillNaFeatureGenerator` 自动处理 |
-| 异常值/偏斜分布 | AutoGluon | `QuantileTransformer` 自动处理 |
-| 类别不平衡 | AutoGluon | `sample_weight="balance_weight"` |
-| 时间特征提取 | 自定义代码 | AutoGluon 不自动提取 day_of_week、hour |
+| 类别编码 | 自动处理 | 框架自动识别并编码类别特征 |
+| 缺失值填充 | 自动处理 | 框架自动处理缺失值 |
+| 异常值/偏斜分布 | 自动处理 | 框架自动进行数据变换 |
+| 类别不平衡 | 自动处理 | `sample_weight="balance_weight"` |
+| 时间特征提取 | 自定义代码 | 框架不自动提取 day_of_week、hour |
 
-**重要**：不要手动进行类别编码或缺失值填充，交给 AutoGluon 自动处理。
+**重要**：不要手动进行类别编码或缺失值填充，交给框架自动处理。
 
 ---
 
@@ -53,7 +53,7 @@ lead_scoring_poc/
 │   │   └── loader.py        # 数据加载、特征工程、数据划分
 │   ├── models/
 │   │   ├── __init__.py
-│   │   └── predictor.py    # AutoGluon 模型封装（含磁盘清理）
+│   │   └── predictor.py    # 模型封装（含磁盘清理）
 │   ├── evaluation/
 │   │   ├── __init__.py
 │   │   └── metrics.py      # Top-K/Lift 评估指标

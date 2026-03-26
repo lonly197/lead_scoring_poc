@@ -70,7 +70,7 @@ def parse_args():
         type=str,
         default="high_quality",
         choices=["best_quality", "high_quality", "good_quality", "medium_quality"],
-        help="AutoGluon 预设",
+        help="模型预设",
     )
     parser.add_argument(
         "--time-limit",

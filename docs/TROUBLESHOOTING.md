@@ -92,7 +92,7 @@ uv run python scripts/diagnose_data.py ./data/202603.tsv
 
 `线索评级结果` 列没有被排除，导致：
 1. 数据泄漏（与目标变量 `线索评级_试驾前` 高度相关）
-2. JSON 字段（`跟进记录_JSON`、`跟进详情_JSON`）格式复杂，导致 AutoGluon 处理失败
+2. JSON 字段（`跟进记录_JSON`、`跟进详情_JSON`）格式复杂，导致处理失败
 
 **修复方案**：
 
@@ -210,7 +210,7 @@ AutoGluon 1.5 在 bagging 模式下不允许直接使用 `tuning_data` 作为验
 
 **参数含义**：
 
-`--time-limit` 是 AutoGluon 的核心参数，控制模型训练的总时间（秒）。AutoGluon 是"时间驱动"的 AutoML 框架，在时间限制内自动尝试多种模型（XGBoost、LightGBM、CatBoost、神经网络等），时间到后返回最佳模型。
+`--time-limit` 是模型训练的核心参数，控制总训练时间（秒）。框架是"时间驱动"的 AutoML 系统，在时间限制内自动尝试多种模型（XGBoost、LightGBM、CatBoost、神经网络等），时间到后返回最佳模型。
 
 **时间与预设匹配**：
 
@@ -265,7 +265,7 @@ predictor = LeadScoringPredictor(
 # 修复后（正确）
 predictor = LeadScoringPredictor(
     label=target_label,
-    sample_weight="balance_weight",  # AutoGluon 自动处理训练和评估权重
+    sample_weight="balance_weight",  # 模型框架自动处理训练和评估权重
 )
 ```
 

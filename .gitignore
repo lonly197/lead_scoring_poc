@@ -39,6 +39,8 @@ ENV/
 
 # Data
 data/*.csv
+data/*.tsv
+data/*.json
 data/*.parquet
 !data/.gitkeep
 

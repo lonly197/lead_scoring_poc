@@ -50,12 +50,12 @@ train_test_drive.py  → 辅助任务（试驾预测）
 
 关键代码：`src/data/adapter.py` 定义了 46 列的映射关系。修改时注意 `线索创建时间` 在索引 4，`线索评级结果`（OHAB）在索引 26。
 
-### AutoGluon 预处理
+### AutoML 预处理
 
-**不要手动进行以下处理**，AutoGluon 会自动处理：
-- 类别编码（`CategoryFeatureGenerator`）
-- 缺失值填充（`FillNaFeatureGenerator`）
-- 异常值/偏斜分布（`QuantileTransformer`）
+**不要手动进行以下处理**，模型框架会自动处理：
+- 类别编码（自动类别特征处理）
+- 缺失值填充（自动填充）
+- 异常值/偏斜分布（自动变换）
 - 类别不平衡（`sample_weight="balance_weight"`）
 
 **需要手动处理的**：
@@ -75,8 +75,8 @@ train_test_drive.py  → 辅助任务（试驾预测）
 
 **避免数据泄露**：
 - 使用 `tuning_data` 参数传入验证集，而非合并到 `train_data`
-- AutoGluon 会用验证集做模型选择，但不参与训练
-- 当启用 bagging（如 `num_bag_folds > 0`）时，`LeadScoringPredictor` 会自动设置 `use_bag_holdout=True` 以兼容 AutoGluon 1.5
+- 模型框架会用验证集做模型选择，但不参与训练
+- 当启用 bagging（如 `num_bag_folds > 0`）时，`LeadScoringPredictor` 会自动设置 `use_bag_holdout=True` 以保证兼容性
 - 验证集性能才能真正反映泛化能力
 
 ## 关键文件
@@ -86,7 +86,7 @@ train_test_drive.py  → 辅助任务（试驾预测）
 | `config/config.py` | 配置管理：ID 列、泄漏字段、特征定义 |
 | `src/data/adapter.py` | 数据格式适配：列映射、目标变量计算 |
 | `src/data/loader.py` | 数据加载：特征工程、OOT 时间切分 |
-| `src/models/predictor.py` | AutoGluon 封装：训练、清理 |
+| `src/models/predictor.py` | 模型封装：训练、清理 |
 
 ## 数据质量警告
 

@@ -194,7 +194,7 @@ def _derive_memory_limit_gb(
     available_memory_gb: float | None,
 ) -> float | None:
     """
-    推导 AutoGluon 内存软限制。
+    推导模型内存软限制。
 
     策略：
     - 预留 2-3GB 给系统和其他进程

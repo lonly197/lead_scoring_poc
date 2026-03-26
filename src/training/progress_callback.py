@@ -1,5 +1,5 @@
 """
-AutoGluon 训练进度监控回调
+训练进度监控回调
 
 提供实时训练进度输出，包括：
 - 已完成/总模型数
@@ -508,7 +508,7 @@ def create_progress_callback(
     创建进度回调的便捷函数
 
     Args:
-        preset: AutoGluon preset 名称
+        preset: 模型预设名称
         time_limit: 训练时间限制（秒）
 
     Returns:

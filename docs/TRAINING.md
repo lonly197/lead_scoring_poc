@@ -50,7 +50,7 @@
 uv run python scripts/run.py train_arrive --daemon \
     --data-path ./data/202602_03.csv \      # 数据文件路径
     --target 到店标签_14天 \               # 目标变量
-    --preset high_quality \                # AutoGluon 预设
+    --preset high_quality \                # 模型预设
     --time-limit 3600 \                    # 训练时间限制（秒）
     --num-bag-folds 5                      # 交叉验证折数
     --output-dir ./outputs/models/arrive_model
@@ -144,7 +144,7 @@ uv run python scripts/validate_model.py \
 ```
 
 > 当前验证脚本会同时保留：
-> - `technical_best_model`：AutoGluon 内部优化目标下的最优模型
+> - `technical_best_model`：模型框架优化目标下的最优模型
 > - `business_recommended_model`：客户报告和主输出默认采用的业务推荐模型
 >
 > `predictions.csv`、`lead_actions.csv`、`hab_bucket_summary.csv` 和客户版报告都会默认跟随 `business_recommended_model`。

@@ -179,7 +179,7 @@ def parse_args():
         type=str,
         default=None,
         choices=["best_quality", "high_quality", "good_quality", "medium_quality"],
-        help="AutoGluon 预设",
+        help="模型预设",
     )
     parser.add_argument(
         "--time-limit",
@@ -292,7 +292,7 @@ def parse_args():
         "--memory-limit-gb",
         type=float,
         default=None,
-        help="AutoGluon 总内存软限制（GB）",
+        help="模型总内存软限制（GB）",
     )
     parser.add_argument(
         "--fit-strategy",

@@ -453,7 +453,7 @@ def format_duration(start_time: str, end_time: Optional[str] = None) -> str:
 
 # ==================== 磁盘空间管理 ====================
 
-# AutoGluon preset 磁盘需求估算（GB）
+# 模型预设磁盘需求估算（GB）
 PRESET_DISK_REQUIREMENTS = {
     "medium_quality": 1.0,
     "good_quality": 2.0,
@@ -496,7 +496,7 @@ def get_preset_disk_requirement(preset: str) -> float:
     获取指定 preset 的磁盘需求估算
 
     Args:
-        preset: AutoGluon preset 名称
+        preset: 模型预设名称
 
     Returns:
         估算的磁盘需求（GB）

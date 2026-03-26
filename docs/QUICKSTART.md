@@ -70,7 +70,7 @@ uv run python scripts/run.py train_ohab --daemon --preset high_quality
 
 - 默认 `--label-mode hab`，仅训练 `H/A/B`
 - `O` 视为已成交/已锁单状态，不进入常规评级桶
-- 可选 `--enable-model-comparison`，保留一个 AutoGluon 内部子模型作为基线（推荐 `gbm`）
+- 可选 `--enable-model-comparison`，保留一个内部子模型作为基线（推荐 `gbm`）
 - 训练完成后会在模型目录输出：
   - `feature_metadata.json`（含 `artifact_status`，用于校验训练是否完整）
   - `feature_importance.*`
@@ -117,7 +117,7 @@ uv run python scripts/generate_business_report.py
 
 - `outputs/validation/model_comparison.csv` 仍保留 `baseline` 与 `best` 的技术对比结果；
 - `outputs/validation/predictions.csv`、`lead_actions.csv`、`hab_bucket_summary.csv` 默认改为跟随 `business_recommended_model`；
-- 客户版 `hab_poc_report.md` 默认以“业务推荐模型”作为主口径，不再直接把 AutoGluon 的 internal best 放在主位。
+- 客户版 `hab_poc_report.md` 默认以”业务推荐模型”作为主口径，不再直接把内部最优模型放在主位。
 
 **推荐切分策略**：
 
@@ -138,7 +138,7 @@ uv run python scripts/run.py train_ohab --daemon \
 - 启动前会自动探测当前 CPU 和可用内存，并自动收敛内存上限
 - 在 16GB 服务器上，默认固定使用 `sequential + num_folds_parallel=1`，避免模型级并行或多折并行把内存打满
 - 默认排除 `RF/XT/KNN/FASTAI/NN_TORCH` 等高内存模型
-- 保留 `gbm` 基线模型和 AutoGluon 最优模型的对比产物，适合客户汇报
+- 保留 `gbm` 基线模型和最优模型的对比产物，适合客户汇报
 
 **手动覆盖只留给高级场景**：
 

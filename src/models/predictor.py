@@ -1,7 +1,7 @@
 """
-AutoGluon 模型封装模块
+AutoML 模型封装模块
 
-封装 AutoGluon TabularPredictor 的训练、预测、评估等功能。
+封装模型训练、预测、评估等功能。
 """
 
 import inspect
@@ -21,7 +21,7 @@ def _hook_params_without_self(method) -> list[inspect.Parameter]:
 
 
 def _callback_hook_is_compatible(base_hook, callback_hook) -> bool:
-    """检查 callback hook 是否兼容当前 AutoGluon 基类签名。"""
+    """检查 callback hook 是否兼容当前基类签名。"""
     base_params = _hook_params_without_self(base_hook)
     callback_params = _hook_params_without_self(callback_hook)
     callback_by_name = {param.name: param for param in callback_params}
@@ -40,11 +40,11 @@ def _callback_hook_is_compatible(base_hook, callback_hook) -> bool:
 
 
 def _is_progress_callback_compatible(callback_cls) -> bool:
-    """基于当前 AutoGluon 版本探测 progress callback 是否可安全注入。"""
+    """探测 progress callback 是否可安全注入。"""
     try:
         from autogluon.core.callbacks import AbstractCallback
     except Exception as exc:
-        logger.debug("无法导入 AutoGluon 回调基类，跳过训练进度监控: %s", exc)
+        logger.debug("无法导入回调基类，跳过训练进度监控: %s", exc)
         return False
 
     try:
@@ -96,7 +96,7 @@ class LeadScoringPredictor:
                 - str: 指定权重列名
             weight_evaluation: 是否在评估时使用样本权重
             max_memory_usage_ratio: 模型级最大内存使用比例（不推荐默认启用）
-            memory_limit_gb: AutoGluon 总内存软限制（GB）
+            memory_limit_gb: AutoML 总内存软限制（GB）
             fit_strategy: 模型级训练策略（sequential/parallel）
             excluded_model_types: 排除的模型类型列表（内存密集型：KNN, RF, XT）
             num_folds_parallel: 并行训练的 fold 数量（None=自动，低内存机器建议 1）
@@ -232,10 +232,10 @@ class LeadScoringPredictor:
 
         Args:
             train_data: 训练数据
-            presets: AutoGluon 预设 ('best_quality', 'high_quality', 'good_quality', 'medium_quality')
+            presets: 模型预设 ('best_quality', 'high_quality', 'good_quality', 'medium_quality')
             time_limit: 训练时间限制（秒）
             excluded_columns: 需要排除的列
-            **kwargs: 其他 AutoGluon 参数
+            **kwargs: 其他训练参数
 
         Returns:
             self
@@ -495,7 +495,7 @@ class LeadScoringPredictor:
             include_label=True,
         )
 
-        # 使用 AutoGluon 内置评估
+        # 使用框架内置评估
         eval_result = self._predictor.evaluate(aligned_test_data, silent=True)
 
         # 计算额外指标
@@ -658,7 +658,7 @@ class LeadScoringPredictor:
 
     def save(self, path: Optional[str] = None, extra_metadata: Optional[Dict[str, Any]] = None):
         """
-        保存模型（AutoGluon 自动保存，此方法保存额外元数据）
+        保存模型（框架自动保存，此方法保存额外元数据）
 
         Args:
             path: 保存路径（可选）
@@ -706,10 +706,10 @@ class LeadScoringPredictor:
             with open(metadata_path, encoding="utf-8") as f:
                 metadata = json.load(f)
         else:
-            # 从 AutoGluon predictor 推断
+            # 从底层 predictor 推断
             metadata = {}
 
-        # 加载 AutoGluon predictor（跳过版本检查以避免兼容性问题）
+        # 加载底层 predictor（跳过版本检查以避免兼容性问题）
         predictor = TabularPredictor.load(str(load_path), require_version_match=False)
 
         feature_columns = metadata.get("feature_columns")
@@ -881,7 +881,7 @@ def train_arrive_model(
         train_data: 训练数据
         label: 目标变量
         output_path: 模型保存路径
-        presets: AutoGluon 预设
+        presets: 模型预设
         time_limit: 训练时间限制
         sample_weight: 样本权重配置，默认 'balance_weight' 自动平衡类别
 
@@ -923,7 +923,7 @@ def train_ohab_model(
         train_data: 训练数据
         label: 目标变量
         output_path: 模型保存路径
-        presets: AutoGluon 预设
+        presets: 模型预设
         time_limit: 训练时间限制
         sample_weight: 样本权重配置，默认 'balance_weight' 自动平衡类别
 

@@ -15,7 +15,7 @@ import atexit
 import json
 import logging
 import os
-import pickle  # noqa: S403 - 加载 AutoGluon 模型需要
+import pickle  # noqa: S403 - 加载模型文件需要
 import subprocess
 import sys
 from pathlib import Path
@@ -394,7 +394,7 @@ def run_background(args: argparse.Namespace) -> int:
 
 
 def load_model(model_path: Path):
-    """加载 AutoGluon 模型，处理版本兼容性问题"""
+    """加载模型，处理版本兼容性问题"""
     # 方式1：尝试使用 require_py_version_match 参数
     try:
         predictor = TabularPredictor.load(
@@ -639,7 +639,7 @@ def main():
             interaction_context=interaction_context,
         )
 
-        # 注意：AutoGluon 自动处理类别编码和缺失值
+        # 注意：模型框架自动处理类别编码和缺失值
         # FeatureEngineer 只处理时间特征提取和数值类型转换
         df_processed, _ = feature_engineer.transform(df, interaction_context=interaction_context)
 

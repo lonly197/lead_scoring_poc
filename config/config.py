@@ -49,7 +49,7 @@ class DataConfig:
 class ModelConfig:
     """模型配置"""
 
-    # AutoGluon 预设: best_quality, high_quality, good_quality, medium_quality
+    # 模型预设: best_quality, high_quality, good_quality, medium_quality
     preset: str = field(
         default_factory=lambda: os.getenv("MODEL_PRESET", "high_quality")
     )
