@@ -166,6 +166,7 @@ class FeatureConfig:
             "客户ID",
             "客户ID_店端",
             "手机号_脱敏",
+            "split_group_key",
             # 以下字段新数据可能缺失
             # "经销店代码",
             # "经销店名称",

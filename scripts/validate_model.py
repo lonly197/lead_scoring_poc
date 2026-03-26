@@ -30,7 +30,7 @@ sys.path.insert(0, str(project_root))
 from config.config import config, get_excluded_columns
 from src.data.feature_screening import apply_screening_report
 from src.data.label_policy import apply_ohab_label_policy, filter_to_effective_ohab_labels
-from src.data.loader import DataLoader, FeatureEngineer
+from src.data.loader import DataLoader, FeatureEngineer, build_split_group_key
 from src.evaluation.comparison import build_comparator_bundle
 from src.models.predictor import LeadScoringPredictor
 from src.evaluation.scorecard import (
@@ -129,6 +129,16 @@ def _resolve_target_label(df: pd.DataFrame, requested_target: str) -> str:
             logger.warning("目标列 %s 不存在，自动回退到兼容列 %s", requested_target, alias)
             return alias
     return requested_target
+
+
+def _collect_required_feature_columns(*predictors) -> set[str]:
+    required_columns: set[str] = set()
+    for predictor in predictors:
+        if predictor is None:
+            continue
+        feature_columns = getattr(predictor, "_feature_columns", None) or []
+        required_columns.update(feature_columns)
+    return required_columns
 
 
 def _safe_float(value: object) -> float:
@@ -621,6 +631,11 @@ def main():
         decision_policy = metadata.get("decision_policy", {"strategy": "argmax"})
         comparison_config = metadata.get("model_comparison", {"enabled": False})
         screening_report = metadata.get("screening_report", {})
+        required_feature_columns = (
+            _collect_required_feature_columns(stage1_predictor, stage2_predictor, baseline_predictor)
+            if pipeline_mode == "two_stage"
+            else _collect_required_feature_columns(predictor)
+        )
     
         if split_info:
             logger.info(f"读取到模型切分元数据，模式: {split_info.get('mode')}")
@@ -690,6 +705,10 @@ def main():
         if screening_report:
             df = apply_screening_report(df, screening_report)
 
+        if "split_group_key" in required_feature_columns and "split_group_key" not in df.columns:
+            df["split_group_key"] = build_split_group_key(df)
+            logger.info("检测到历史模型依赖 split_group_key，已在评估阶段自动补齐")
+
         business_metric_columns = [
             "到店标签_7天",
             "到店标签_14天",
@@ -700,13 +719,6 @@ def main():
             FINAL_ORDERED_COLUMN,
         ]
         business_metric_frame = df[[col for col in business_metric_columns if col in df.columns]].copy()
-
-        # 排除不需要的列（但保留目标列用于评估）
-        excluded_columns = get_excluded_columns(target)
-        cols_to_drop = [col for col in excluded_columns if col in df.columns and col != target]
-        if cols_to_drop:
-            df = df.drop(columns=cols_to_drop)
-            logger.info(f"排除 {len(cols_to_drop)} 列: {cols_to_drop[:5]}{'...' if len(cols_to_drop) > 5 else ''}")
 
         # 特征工程（与训练时相同的处理）
         logger.info("执行特征工程...")
@@ -719,6 +731,13 @@ def main():
         # 注意：模型框架自动处理类别编码和缺失值
         # FeatureEngineer 只处理时间特征提取和数值类型转换
         df_processed, _ = feature_engineer.transform(df, interaction_context=interaction_context)
+
+        # 排除不需要的列（但保留目标列用于评估）
+        excluded_columns = get_excluded_columns(target)
+        cols_to_drop = [col for col in excluded_columns if col in df_processed.columns and col != target]
+        if cols_to_drop:
+            df_processed = df_processed.drop(columns=cols_to_drop)
+            logger.info(f"排除 {len(cols_to_drop)} 列: {cols_to_drop[:5]}{'...' if len(cols_to_drop) > 5 else ''}")
 
         # 保存目标值用于评估
         y_true = df_processed[target].values

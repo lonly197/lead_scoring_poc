@@ -71,3 +71,28 @@ def test_feature_engineer_keeps_raw_average_duration_and_writes_derived_column()
     assert processed.loc[0, "平均通话时长"] == 999.0
     assert processed.loc[0, "平均通话时长_派生"] == 60.0
 
+
+def test_feature_engineer_generates_json_availability_from_raw_followup_column():
+    df = pd.DataFrame(
+        {
+            "线索创建时间": ["2026-03-01 10:00:00", "2026-03-01 10:00:00"],
+            "首触时间": ["2026-03-01 10:20:00", "2026-03-01 10:20:00"],
+            "一级渠道名称": ["直营", "直营"],
+            "二级渠道名称": ["官网", "官网"],
+            "所在城市": ["上海市", "上海市"],
+            "首触意向车型": ["车型A", "车型A"],
+            "通话次数": [1, 1],
+            "通话总时长": [80, 80],
+            "平均通话时长": [80.0, 80.0],
+            "非首触跟进记录": ['{"items":[1]}', ""],
+        }
+    )
+
+    engineer = FeatureEngineer(
+        time_columns=["线索创建时间", "首触时间"],
+        numeric_columns=["通话次数", "通话总时长", "平均通话时长"],
+    )
+    processed, _ = engineer.fit_transform(df)
+
+    assert "JSON跟进明细可用" in processed.columns
+    assert processed["JSON跟进明细可用"].tolist() == [1, 0]

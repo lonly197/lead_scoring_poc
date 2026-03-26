@@ -66,6 +66,7 @@ def load_validate_script(monkeypatch):
 
     loader_module.DataLoader = DummyDataLoader
     loader_module.FeatureEngineer = DummyFeatureEngineer
+    loader_module.build_split_group_key = lambda df: df
 
     business_logic_module = types.ModuleType("src.evaluation.business_logic")
     business_logic_module.build_bucket_summary_text = lambda records: []
