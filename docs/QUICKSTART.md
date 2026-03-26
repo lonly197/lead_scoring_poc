@@ -33,7 +33,7 @@ uv run python scripts/diagnose_data.py ./data/202603.tsv
 - 验证关键列是否存在（线索创建时间、线索唯一ID 等）
 - 显示 OHAB 评级分布、是否仍保留 O 级
 - 检查 `is_final_ordered` 是否存在及其分布
-- 输出 `线索创建时间` 范围，便于确认是否会触发自动 OOT
+- 输出 `线索创建时间` 范围，便于判断是否适合显式启用 OOT
 - 列出所有列名和样本值（方便调试映射问题）
 
 ---
@@ -82,7 +82,7 @@ uv run python scripts/run.py train_ohab --daemon --preset high_quality
 
 **服务器端最简单闭环**
 
-如果服务器已经按最新 [.env.example](../.env.example) 部署好 `DATA_PATH` 和 `OHAB_*` 环境变量，那么训练、验证、报告生成三步都可以直接使用默认参数，就能满足 `baseline vs best` 对比需求。
+如果服务器已经按最新 [.env.example](../.env.example) 部署好 `DATA_PATH` 和 `OHAB_*` 环境变量，那么训练、验证、报告生成三步都可以直接使用默认参数，完成默认两阶段 HAB 流水线闭环。
 
 ```bash
 # 1. 训练：后台启动 HAB 模型（默认使用 .env 中的 DATA_PATH + server_16g_compare）
@@ -92,7 +92,7 @@ uv run python scripts/run.py train_ohab --daemon
 uv run python scripts/monitor.py status
 uv run python scripts/monitor.py log train_ohab -f
 
-# 3. 验证：生成 baseline vs best 对比结果
+# 3. 验证：生成两阶段 HAB 评估结果
 uv run python scripts/validate_model.py
 
 # 4. 生成客户版 Markdown 报告
@@ -103,42 +103,42 @@ uv run python scripts/generate_business_report.py
 
 - `DATA_PATH=./data/202602~03.tsv`
 - `OHAB_TRAINING_PROFILE=server_16g_compare`
-- `OHAB_ENABLE_MODEL_COMPARISON=true`
-- `OHAB_BASELINE_FAMILY=gbm`
+- `OHAB_PIPELINE_MODE=two_stage`
+- `OHAB_SPLIT_MODE=random`
+- `OHAB_SPLIT_GROUP_MODE=phone_or_lead`
 
 执行完成后，重点检查：
 
-- `outputs/validation/model_comparison.csv`
-- `outputs/validation/predictions_baseline.csv`
 - `outputs/validation/predictions_best.csv`
 - `outputs/reports/hab_poc_report.md`
 
 补充说明：
 
-- `outputs/validation/model_comparison.csv` 仍保留 `baseline` 与 `best` 的技术对比结果；
-- `outputs/validation/predictions.csv`、`lead_actions.csv`、`hab_bucket_summary.csv` 默认改为跟随 `business_recommended_model`；
-- 客户版 `hab_poc_report.md` 默认以”业务推荐模型”作为主口径，不再直接把内部最优模型放在主位。
+- 默认 `server_16g_compare` 会训练两阶段流水线，并输出统一的 `predictions_best.csv`、`hab_bucket_summary_best.csv`、`evaluation_summary.json`；
+- 如需 `baseline vs best` 技术对比，需要显式切回单阶段模式，并启用模型对比；
+- 客户版 `hab_poc_report.md` 默认读取验证目录中的主评估结果，不再依赖旧的单阶段对比文件。
 
 **推荐切分策略**：
 
-对 `202602~03.tsv` 这类跨月数据，建议固定手动 OOT 切分，保证每次汇报口径一致。
+当前默认推荐随机分组切分，因为现有数据集更适合先保证“同客不泄漏”和 HAB 分层稳定性。只有在你明确确认数据已是评分时点快照时，再显式切到 OOT。
 
 ```bash
-# 推荐：16GB 服务器 HAB 评级训练（固定 OOT 口径 + 基线模型对比）
+# 推荐：16GB 服务器 HAB 评级训练（默认两阶段 + 随机分组切分）
 uv run python scripts/run.py train_ohab --daemon \
     --data-path ./data/202602~03.tsv \
-    --training-profile server_16g_compare \
-    --train-end 2026-03-15 \
-    --valid-end 2026-03-20
+    --training-profile server_16g_compare
 ```
 
 **为什么推荐 `server_16g_compare`**：
 
 - 适配 16GB 内存服务器，默认使用 `good_quality + 3 folds`
+- 默认训练阶段按 `balanced_accuracy` 选模
+- 默认使用 `two_stage` 流水线
+- 默认使用 `split_mode=random`
 - 启动前会自动探测当前 CPU 和可用内存，并自动收敛内存上限
 - 在 16GB 服务器上，默认固定使用 `sequential + num_folds_parallel=1`，避免模型级并行或多折并行把内存打满
 - 默认排除 `RF/XT/KNN/FASTAI/NN_TORCH` 等高内存模型
-- 保留 `gbm` 基线模型和最优模型的对比产物，适合客户汇报
+- 保留切回单阶段后做技术对比的能力
 
 **手动覆盖只留给高级场景**：
 
@@ -147,9 +147,7 @@ uv run python scripts/run.py train_ohab --daemon \
     --data-path ./data/202602~03.tsv \
     --training-profile server_16g_compare \
     --memory-limit-gb 8.5 \
-    --num-folds-parallel 1 \
-    --train-end 2026-03-15 \
-    --valid-end 2026-03-20
+    --num-folds-parallel 1
 ```
 
 **如果只想验证 `NN_TORCH` 是否有增益**：
@@ -157,9 +155,7 @@ uv run python scripts/run.py train_ohab --daemon \
 ```bash
 uv run python scripts/run.py train_ohab --daemon \
     --data-path ./data/202602~03.tsv \
-    --training-profile server_16g_probe_nn_torch \
-    --train-end 2026-03-15 \
-    --valid-end 2026-03-20
+    --training-profile server_16g_probe_nn_torch
 ```
 
 这个实验档只恢复 `NN_TORCH`，继续排除 `FASTAI/RF/XT`，并关闭 bagging，适合做单变量对比；未验证出显著收益前，不建议把它升级为正式默认档。
@@ -169,9 +165,7 @@ uv run python scripts/run.py train_ohab --daemon \
 ```bash
 uv run python scripts/run.py train_ohab --daemon \
     --data-path ./data/202602~03.tsv \
-    --training-profile server_16g_compare_balanced \
-    --train-end 2026-03-15 \
-    --valid-end 2026-03-20
+    --training-profile server_16g_compare_balanced
 ```
 
 这个档位只把训练阶段的 `eval_metric` 改为 `balanced_accuracy`，适合和默认档 `server_16g_compare` 做受控对比。
@@ -181,9 +175,7 @@ uv run python scripts/run.py train_ohab --daemon \
 ```bash
 uv run python scripts/run.py train_ohab --daemon \
     --data-path ./data/202602~03.tsv \
-    --training-profile lab_full_quality \
-    --train-end 2026-03-15 \
-    --valid-end 2026-03-20
+    --training-profile lab_full_quality
 ```
 
 **训练完成后查看状态**：
@@ -216,15 +208,13 @@ uv run python scripts/validate_model.py \
 - `hab_bucket_summary.csv`
 - `lead_actions.csv`
 - `monotonicity_check.json`
-- `model_comparison.csv`
-- `predictions_baseline.csv`
 - `predictions_best.csv`
 
 其中：
 
 - `hab_bucket_summary.csv`：看 `H/A/B` 三桶的 14 天到店率、试驾率是否形成单调分层
 - `lead_actions.csv`：可直接给业务看，包含 `预测HAB + 建议SOP + 原因1-3`
-- `model_comparison.csv`：看基线模型和最优模型在 `平衡准确率 / 宏平均 F1 / B 类召回率` 上的差异
+- `evaluation_summary.json`：看 `balanced_accuracy / macro_f1 / accuracy` 以及两阶段决策策略
 
 ### 生成客户版 Markdown 报告
 
@@ -248,9 +238,7 @@ git pull origin main
 # 2. 训练 HAB 模型
 uv run python scripts/run.py train_ohab --daemon \
     --data-path ./data/202602~03.tsv \
-    --training-profile server_16g_compare \
-    --train-end 2026-03-15 \
-    --valid-end 2026-03-20
+    --training-profile server_16g_compare
 
 # 3. 验证
 uv run python scripts/validate_model.py \
@@ -365,11 +353,11 @@ uv run python scripts/validate_model.py \
 ```
 
 **验证行为说明**：
-- 若模型元数据中存在 `split_info`，脚本会自动按训练时记录的 `valid_end` 只评估 OOT 测试集，避免混入训练段和验证段数据。
+- 若模型元数据中存在 `split_info`，脚本会自动只评估训练时记录的测试集；随机分组切分与显式 OOT 都适用。
 - 若验证数据中存在 `is_final_ordered`，脚本会额外输出“AI 评级 vs 最终下定”的业务转化统计，但该列不会参与模型特征。
 - 验证脚本只接受由统一入口 `train_ohab.py` / `scripts/run.py train_ohab` 生成且 `feature_metadata.json -> artifact_status.training_complete=true` 的模型目录。
-- 若模型目录缺少 `artifact_status`、缺少 baseline/best 对比元数据，或来自旧的 `ohab_oot` 流程，`validate_model.py` 会直接报错并要求重新训练。
-- 若训练仅缺少 `feature_importance` / `business_dimension_contribution` / `topk` 等补充产物，仍可继续做 baseline vs best 验证，但客户报告中的特征贡献与 Top 特征章节会为空。
+- 若模型目录缺少 `artifact_status`，或来自旧的 `ohab_oot` 流程，`validate_model.py` 会直接报错并要求重新训练。
+- 若训练仅缺少 `feature_importance` / `business_dimension_contribution` / `topk` 等补充产物，仍可继续验证，但客户报告中的特征贡献与 Top 特征章节会为空。
 - `train_ohab` 默认只生成 `feature_importance.csv/json` 与 `business_dimension_contribution.json`，不会默认生成 PNG 图表；客户报告不依赖这些图片。
 - 若确实需要汇报配图，可在训练时显式开启 `OHAB_GENERATE_PLOTS=true` 或传 `--generate-plots`。
 

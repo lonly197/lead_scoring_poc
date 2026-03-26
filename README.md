@@ -4,16 +4,17 @@
 
 ## 项目目标
 
-- **主指标**：到店预测（Top-K 高优线索到店率）
-- **目标变量**：`到店标签_14天`
-- **业务目标**：输出线索评分排名，支持销售资源优先分配。
+- **主流程**：HAB 智能评级训练与验证
+- **默认目标变量**：`线索评级_试驾前`
+- **业务目标**：输出可解释的 `H/A/B` 分层结果，支持销售资源优先分配与 SOP 差异化跟进。
 
 ## 核心特性
 
-- **🚀 智能自适应切分**：脚本自动探查数据时间跨度。跨度充足时自动执行 OOT（Out-of-Time）时间切分；跨度不足时（如单日快照）自动退化为分层随机切分。
-- **🛡️ 全链路防泄漏**：在随机切分降级模式下，脚本自动提取“防泄漏指纹”（测试集 ID），强制 `validate_model.py` 仅评估从未见过的数据，确保指标真实。
+- **🚀 默认随机分组切分**：`train_ohab` 默认按手机号优先、线索 ID 回退的分组键做随机 `70/15/15` 切分，避免同客泄漏。
+- **🛡️ 全链路防泄漏**：训练阶段记录测试集分组键，`validate_model.py` 会自动只评估训练时定义的测试集。
 - **🚿 特征脱水技术**：内置严格的后验特征排除机制，彻底杜绝模型“偷看答案”的行为。
-- **⚖️ 基线模型对比**：可保留模型内部单模型子模型（如 `LightGBM`）作为基线，并与最优模型在同一 OOT 测试集上做对比输出。
+- **🧭 两阶段 HAB 流水线**：默认先做 `H vs 非H`，再做 `A vs B`，并在验证集调 `H` 阈值，优先兼顾分类稳定性与业务单调性。
+- **⚖️ 可选单阶段对比**：如需保留 `baseline vs best` 技术对比，可切换回单阶段训练并启用模型对比。
 - **🧠 资源自适应训练**：`train_ohab` 启动前会自动探测当前 CPU 数和可用内存，自动收敛 `memory_limit_gb` 与 `num_folds_parallel`；显式命令行参数仍可覆盖。
 
 ## 快速开始
@@ -24,14 +25,12 @@
 # 安装依赖
 uv sync && cp .env.example .env
 
-# HAB 评级训练（16GB 服务器推荐档，带基线 vs 最优模型对比）
+# HAB 评级训练（16GB 服务器推荐档，默认两阶段 + 随机分组切分）
 uv run python scripts/run.py train_ohab --daemon \
   --data-path ./data/202602~03.tsv \
-  --training-profile server_16g_compare \
-  --train-end 2026-03-15 \
-  --valid-end 2026-03-20
+  --training-profile server_16g_compare
 
-# 验证模型（自动输出 baseline / best 双结果）
+# 验证模型（自动按训练时记录的测试集做防泄漏评估）
 uv run python scripts/validate_model.py \
   --model-path ./outputs/models/ohab_model \
   --data-path ./data/202602~03.tsv

@@ -378,11 +378,14 @@ uv run python scripts/monitor.py log train_ohab -f
 模型目录缺少 baseline/best 对比元数据
 ```
 
+该报错通常只会出现在**单阶段且启用了模型对比**的旧口径或兼容场景。当前默认两阶段流水线不会要求这组元数据。
+
 **问题原因**：
 
 1. 当前 `validate_model.py` 只接受统一入口 `train_ohab.py` / `scripts/run.py train_ohab` 生成的完整模型目录
 2. 若训练在 `feature_importance`、业务维度、Top-K 等补充产物阶段之前或期间异常退出，模型目录可能只写出早期 `feature_metadata.json`
 3. 旧的 `ohab_oot` 训练流程或历史模型目录不包含新的 `artifact_status` 标记，验证脚本会直接拒绝继续运行
+4. 若使用单阶段模型对比路径，但训练元数据未正确写出 `model_comparison.models`，也会触发这个报错
 
 **排查建议**：
 

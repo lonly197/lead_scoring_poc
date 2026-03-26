@@ -15,13 +15,13 @@
 | 原格式 | `20260308-v2.csv` | 逗号分隔，有表头，60列 |
 | 新格式 | `202603.csv` | Tab分隔，无表头，46列 |
 
-**重要**：适配器**默认关闭**，需要显式启用。这是为了确保不干扰后续新数据的正常加载。
+**重要**：项目训练脚本默认使用 `DataLoader(..., auto_adapt=True)`，会自动适配当前两套主数据格式。
 
 ```python
 from src.data.loader import DataLoader
 
-# 默认行为：不启用适配，直接加载
-loader = DataLoader("data/your_data.csv")
+# 显式关闭适配：直接按文件原始结构加载
+loader = DataLoader("data/your_data.csv", auto_adapt=False)
 df = loader.load()
 
 # 启用适配：处理新格式数据（如 202603.csv）
@@ -89,7 +89,7 @@ DATA_PATH=/path/to/your_data.csv
 ```python
 from src.data.loader import DataLoader
 
-loader = DataLoader("data/202603.csv")
+loader = DataLoader("data/202603.csv", auto_adapt=True)
 df = loader.load()
 
 # 检查目标变量
@@ -104,7 +104,7 @@ print(f"OHAB分布: {df['线索评级_试驾前'].value_counts().to_dict()}")
 
 ### Q: 三个脚本需要按顺序执行吗？
 
-**不需要。** 三个脚本完全独立，没有依赖关系。推荐先运行 `train_arrive.py`，因为到店预测是 POC 的核心指标。
+**不需要。** 三个脚本完全独立，没有依赖关系。当前 POC 主流程优先看 `train_ohab.py`，因为仓库默认配置和最新评估口径都围绕 HAB 智能评级。
 
 ### Q: 训练需要多长时间？
 
@@ -127,12 +127,12 @@ print(f"OHAB分布: {df['线索评级_试驾前'].value_counts().to_dict()}")
 # 在训练脚本中已自动配置
 predictor = LeadScoringPredictor(
     label="线索评级_试驾前",
-    sample_weight="balance_weight",  # 自动平衡 O/H/A/B 权重
+    sample_weight="balance_weight",  # 自动平衡 H/A/B 权重
     weight_evaluation=True,
 )
 ```
 
-**效果**：H 类（17%）和 O 类（1.9%）的召回率会得到提升。
+**效果**：少数类的召回率会得到一定补偿，但核心提升仍依赖更合适的切分方式、特征和标签口径。
 
 ### Q: 如何后台运行长时间训练？
 
@@ -156,7 +156,7 @@ uv run python scripts/monitor.py stop --all
 
 ### Q: 如何运行 OOT 验证训练？
 
-OOT（Out-of-Time）验证适用于新格式数据，现已统一到 `train_arrive.py` / `train_ohab.py`，脚本会自动探查时间跨度并决定是否启用 OOT：
+OOT（Out-of-Time）验证仍然支持，但对当前 HAB 主流程不是默认模式。`train_ohab.py` 当前默认是随机分组切分，只有显式配置才会启用 OOT：
 
 ```bash
 # 后台运行到店预测（统一入口）
@@ -175,10 +175,11 @@ uv run python scripts/monitor.py log train_arrive -f
 uv run python scripts/monitor.py log train_ohab -f
 ```
 
-**OOT 切分说明**：
+**当前切分说明**：
 
-- 当 `线索创建时间` 跨度 `>= 14` 天时，脚本自动按时间轴做 `70%训练 / 15%验证 / 15%测试`
-- 当跨度 `< 14` 天时，脚本自动降级为随机切分，并记录测试集指纹供验证脚本隔离
+- 默认 `OHAB_SPLIT_MODE=random`，按分组键做 `70%训练 / 15%验证 / 15%测试`
+- 只有显式传 `--train-end/--valid-end`，或把 `OHAB_SPLIT_MODE` 设为 `auto_oot/manual_oot` 时，才走时间切分
+- 自动 OOT 的最小跨度默认是 `90` 天
 
 如果你希望手动控制切分点：
 
@@ -189,7 +190,7 @@ uv run python scripts/train_ohab.py \
     --valid-end 2026-03-20
 ```
 
-对于 `202603.tsv` 这类单月数据，典型自动 OOT 结果可能接近下表：
+对于 `202603.tsv` 这类单月数据，通常更建议继续使用随机分组切分，而不是依赖自动 OOT。
 
 | 数据集 | 时间范围 | 用途 |
 |--------|----------|------|
@@ -197,11 +198,9 @@ uv run python scripts/train_ohab.py \
 | 验证集 | 2026-03-11 ~ 2026-03-16 | 超参数调优 |
 | 测试集 | >= 2026-03-16 | 最终评估 |
 
-**为什么使用 7 天窗口？**
+**什么时候再考虑 OOT？**
 
-数据时间范围 2026-03-01 ~ 2026-03-23，共 23 天。使用 7 天预测窗口：
-- 测试集从 3 月 16 日开始，到 3 月 23 日有完整 7 天观察期
-- 确保测试集标签完整，避免数据泄漏
+当你已经确认数据集是“评分时点快照”，且未来标签观察窗完整时，再显式使用 OOT 更合适。
 
 ### Q: 如何使用 OOT 时间切分验证？
 
@@ -230,7 +229,7 @@ uv run python scripts/validate_model.py \
     --data-path ./data/202602~03.tsv
 ```
 
-如果模型元数据中存在 `split_info`，`validate_model.py` 会自动只评估训练时定义的 OOT 测试集；如果数据里包含 `is_final_ordered`，还会额外输出“AI 评级 vs 最终下定”的业务转化统计。
+如果模型元数据中存在 `split_info`，`validate_model.py` 会自动只评估训练时定义的测试集；如果数据里包含 `is_final_ordered`，还会额外输出“AI 评级 vs 最终下定”的业务转化统计。
 
 ---
 

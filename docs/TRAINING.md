@@ -17,27 +17,26 @@
 
 ## 脚本概览
 
-本项目提供统一的智能自适应训练脚本。**脚本会自动识别数据时间跨度并选择最佳切分策略。**
+本项目提供统一的智能自适应训练脚本。当前 `train_ohab.py` 默认采用**随机分组切分 + 两阶段 HAB 流水线**，只有显式配置时才启用 OOT。
 
 ### 核心脚本列表
 
 | 脚本 | 目标变量 | 任务类型 | 核心特性 |
 |------|----------|----------|----------|
 | `train_arrive.py` | `到店标签_14天` | 二分类 | 智能自适应 OOT/随机切分，输出 Top-K/Lift |
-| `train_ohab.py` | `线索评级_试驾前` | 多分类 | 智能自适应 OOT/随机切分，多类别权重平衡，支持基线模型对比，默认仅输出结构化解释产物 |
+| `train_ohab.py` | `线索评级_试驾前` | HAB 评级 | 默认随机分组切分、两阶段 `H vs 非H + A vs B`、多类别权重平衡、默认输出结构化解释产物 |
 | `train_test_drive.py` | `试驾标签_14天` | 二分类 | 支持所有特征工程与自适应切分 |
 
 ---
 
-## 🚀 智能自适应切分逻辑
+## 🚀 切分逻辑
 
-为了平衡“单日快照数据”与“跨月长周期数据”的处理需求，脚本内置了智能探查机制：
+`train_ohab.py` 当前默认优先保证同客隔离与业务分层稳定性：
 
-1.  **自动探查**：启动时自动计算 `线索创建时间` 的时间跨度。
-2.  **自适应选择**：
-    *   **OOT 模式 (跨度 $\ge 14$ 天)**：自动按照 `70%训练 / 15%验证 / 15%测试` 的比例进行时间轴切分。模拟“用过去预测未来”。
-    *   **随机切分模式 (跨度 $< 14$ 天)**：自动降级为分层随机切分（80/20），并提取测试集样本 ID 作为“防泄漏指纹”。
-3.  **防泄漏闭环**：无论哪种模式，切分元数据都会保存在 `feature_metadata.json` 中，`validate_model.py` 会自动识别并实施物理隔离。
+1.  **默认模式**：`OHAB_SPLIT_MODE=random`，按手机号优先、线索 ID 回退的分组键做 `70%训练 / 15%验证 / 15%测试` 切分。
+2.  **显式 OOT**：只有传 `--train-end/--valid-end` 或把 `OHAB_SPLIT_MODE` 设为 `auto_oot/manual_oot` 时，才走时间切分。
+3.  **自动 OOT 门槛**：自动 OOT 的最小跨度默认是 `90` 天，而不是旧版的 `14` 天。
+4.  **防泄漏闭环**：切分元数据都会保存在 `feature_metadata.json` 中，`validate_model.py` 会自动识别并实施物理隔离。
 
 ---
 
@@ -71,15 +70,15 @@ uv run python scripts/run.py train_ohab --daemon \
 ```bash
 uv run python scripts/run.py train_ohab --daemon \
     --data-path ./data/202602~03.tsv \
-    --training-profile server_16g_compare \
-    --train-end 2026-03-15 \
-    --valid-end 2026-03-20
+    --training-profile server_16g_compare
 ```
 
 该档位的默认取舍是：
 
 - 使用 `good_quality`
-- 保留 `LightGBM / CatBoost / XGBoost + WeightedEnsemble`
+- 默认训练阶段按 `balanced_accuracy` 选模
+- 默认使用两阶段 `H vs 非H + A vs B`
+- 保留 `LightGBM / CatBoost / XGBoost`
 - 默认排除 `RF/XT/KNN/FASTAI/NN_TORCH`
 - 固定 `fit_strategy=sequential`
 - 固定 `num_folds_parallel=1`
@@ -99,13 +98,13 @@ uv run python scripts/run.py train_ohab --daemon \
     --valid-end 2026-03-20
 ```
 
-该档位除 `eval_metric=balanced_accuracy` 外，其他资源约束、模型池和对比输出都与 `server_16g_compare` 保持一致，适合做一轮并排 A/B 验证。
+该档位当前与正式档同为业务导向口径，主要用于受控回归验证配置稳定性。
 
 ### 资源自适应控制
 
 内存控制参数现在支持**所有**训练任务（train_arrive, train_ohab, train_test_drive），帮助在资源受限的环境下稳定运行：
 
-- `--max-memory-ratio`: 最大内存使用比例（默认 0.8，建议 0.6-0.8）
+- `--max-memory-ratio`: 最大内存使用比例（当前 OHAB 默认 0.7，建议 0.6-0.8）
 - `--exclude-memory-heavy-models`: 排除内存密集型模型（KNN, RF, XT）
 - `--num-folds-parallel`: 限制并行训练的 fold 数量
 
@@ -143,14 +142,11 @@ uv run python scripts/validate_model.py \
     --data-path ./data/202603.tsv
 ```
 
-> 当前验证脚本会同时保留：
-> - `technical_best_model`：模型框架优化目标下的最优模型
-> - `business_recommended_model`：客户报告和主输出默认采用的业务推荐模型
->
-> `predictions.csv`、`lead_actions.csv`、`hab_bucket_summary.csv` 和客户版报告都会默认跟随 `business_recommended_model`。
+> 当前默认两阶段流水线会输出统一主结果，常用文件为 `predictions_best.csv`、`hab_bucket_summary_best.csv`、`evaluation_summary.json`。
+> 只有切回单阶段并保留模型对比时，才会额外输出 `baseline/best` 的技术对比文件。
 
-### 进阶：严格 OOT 验证（防泄露）
-在评估 OOT 效果时，必须开启 `--oot-test` 标志，以确保仅评估测试集（时间 >= valid_end）范围内的数据：
+### 进阶：显式 OOT 验证（防泄露）
+在训练阶段显式使用时间切分后，如需强制仅评估 `valid_end` 之后的数据，可开启 `--oot-test`：
 
 ```bash
 uv run python scripts/validate_model.py \
