@@ -4,6 +4,16 @@
 
 ---
 
+## [2026-03-30] 三模型集成训练与数据合并
+
+- 新增 `scripts/merge_data.py`：合并线索宽表 + DMP 行为数据
+- 新增 `scripts/train_test_drive_ensemble.py`：7/14/21 天试驾预测三模型训练，支持 `--parallel` 并行
+- 新增 `src/inference/hab_deriver.py`：从概率推导 H/A/B 评级
+- 新增 `--train-path`/`--test-path`：支持提前拆分数据文件（parquet/csv/tsv）
+- 验证脚本拆分为独立文件：`validate_ohab_model.py`、`validate_test_drive_model.py`、`validate_ensemble.py`
+
+---
+
 ## [2026-03-24] run.py 参数转发缺口修复
 
 ### 背景
