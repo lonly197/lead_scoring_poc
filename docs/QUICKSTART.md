@@ -167,6 +167,33 @@ uv run python scripts/merge_data.py \
     --dmp ./data/DMP行为数据.csv \
     --output ./data/线索宽表_脱敏.parquet \
     --desensitize
+
+# 合并 + 随机拆分训练/测试集
+uv run python scripts/merge_data.py \
+    --excel ./data/线索宽表.xlsx \
+    --dmp ./data/DMP行为数据.csv \
+    --output ./data/线索宽表 \
+    --split \
+    --split-mode random \
+    --split-target 线索评级结果
+
+# 合并 + OOT 时间切分（推荐用于3个月数据）
+uv run python scripts/merge_data.py \
+    --excel ./data/线索宽表.xlsx \
+    --dmp ./data/DMP行为数据.csv \
+    --output ./data/线索宽表 \
+    --split \
+    --split-mode oot \
+    --split-time-column 线索创建时间 \
+    --split-cutoff 2026-03-01
+
+# 合并 + 自动选择切分方式
+uv run python scripts/merge_data.py \
+    --excel ./data/线索宽表.xlsx \
+    --dmp ./data/DMP行为数据.csv \
+    --output ./data/线索宽表 \
+    --split \
+    --split-mode auto
 ```
 
 **功能**：
@@ -178,6 +205,25 @@ uv run python scripts/merge_data.py \
 - 品牌关键词：广汽丰田/广丰 → 品牌A，广汽 → 集团A，GTMC → 代号G
 - ID 字段：保留前2后2位（如 `AB****XY`）
 - 文本字段：手机号、身份证正则替换
+
+**拆分参数**（`--split`）：
+
+| 参数 | 说明 | 默认值 |
+|------|------|--------|
+| `--split-mode` | 拆分模式：random(随机), oot(时间切分), auto(自动选择) | random |
+| `--split-target` | 目标列名（用于分层采样） | 线索评级结果 |
+| `--split-ratio` | 测试集比例 | 0.2 |
+| `--split-time-column` | 时间列名（OOT 模式） | 线索创建时间 |
+| `--split-cutoff` | OOT 切分时间点（YYYY-MM-DD） | 自动计算 |
+| `--split-min-oot-days` | 自动模式触发 OOT 的最少天数 | 30 |
+
+**拆分模式说明**：
+
+| 模式 | 说明 | 适用场景 |
+|------|------|---------|
+| `random` | 随机分层切分，保持类别分布 | 数据量少、时间跨度小 |
+| `oot` | 时间切分（Out-of-Time），用历史预测未来 | 3个月以上数据，模拟真实部署 |
+| `auto` | 自动判断：跨度≥30天用OOT，否则随机 | 不确定时使用 |
 
 ---
 

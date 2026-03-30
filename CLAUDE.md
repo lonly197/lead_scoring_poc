@@ -64,13 +64,24 @@ uv run python scripts/merge_data.py \
     --output ./data/线索宽表_脱敏.parquet \
     --desensitize
 
-# 合并 + 拆分训练/测试集（输出 train/test 文件）
+# 合并 + 随机拆分训练/测试集（输出 train/test 文件）
 uv run python scripts/merge_data.py \
     --excel ./data/线索宽表.xlsx \
     --dmp ./data/DMP行为数据.csv \
     --output ./data/线索宽表 \
     --split \
+    --split-mode random \
     --split-target 线索评级结果
+
+# 合并 + OOT 时间切分（推荐用于3个月数据）
+uv run python scripts/merge_data.py \
+    --excel ./data/线索宽表.xlsx \
+    --dmp ./data/DMP行为数据.csv \
+    --output ./data/线索宽表 \
+    --split \
+    --split-mode oot \
+    --split-time-column 线索创建时间 \
+    --split-cutoff 2026-03-01
 
 # 输出: 线索宽表_train.parquet, 线索宽表_test.parquet
 ```

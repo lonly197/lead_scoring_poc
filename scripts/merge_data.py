@@ -7,7 +7,12 @@
 - 分批处理 DMP 数据
 - 流式写入
 - 支持数据脱敏
-- 支持数据集拆分
+- 支持数据集拆分（随机/OOT/自动）
+
+拆分模式：
+- random: 随机按比例切分（默认）
+- oot: 按时间切分（Out-of-Time，用历史数据预测未来）
+- auto: 自动判断（时间跨度>=30天用OOT，否则用随机）
 
 用法：
     # 基础合并
@@ -23,13 +28,32 @@
         --output 测试数据/线索宽表_脱敏.parquet \
         --desensitize
 
-    # 合并 + 拆分训练/测试集
+    # 合并 + 随机拆分训练/测试集
     uv run python scripts/merge_data.py \
         --excel 测试数据/202601~03_v2.xlsx \
         --dmp 测试数据/DMP行为数据(202601~03).csv \
         --output 测试数据/线索宽表 \
         --split \
+        --split-mode random \
         --split-target 线索评级结果
+
+    # 合并 + OOT 时间切分（推荐用于3个月数据）
+    uv run python scripts/merge_data.py \
+        --excel 测试数据/202601~03_v2.xlsx \
+        --dmp 测试数据/DMP行为数据(202601~03).csv \
+        --output 测试数据/线索宽表 \
+        --split \
+        --split-mode oot \
+        --split-time-column 线索创建时间 \
+        --split-cutoff 2026-03-01
+
+    # 合并 + 自动选择切分方式
+    uv run python scripts/merge_data.py \
+        --excel 测试数据/202601~03_v2.xlsx \
+        --dmp 测试数据/DMP行为数据(202601~03).csv \
+        --output 测试数据/线索宽表 \
+        --split \
+        --split-mode auto
 
     # 输出：线索宽表_train.parquet, 线索宽表_test.parquet
 """
@@ -252,6 +276,139 @@ def split_data(
     return train_df, test_df
 
 
+def split_data_oot(
+    pl,
+    df: "pl.DataFrame",
+    time_column: str,
+    cutoff_date: str,
+    target_column: str = None,
+) -> tuple["pl.DataFrame", "pl.DataFrame"]:
+    """
+    OOT（Out-of-Time）时间切分
+
+    使用时间切分而非随机切分，更好地模拟真实预测场景：
+    用历史数据训练，预测未来数据。
+
+    Args:
+        pl: polars 模块
+        df: 数据 DataFrame
+        time_column: 时间列名
+        cutoff_date: 切分时间点（该日期及之后为测试集）
+        target_column: 目标变量列名（可选，用于打印分布）
+
+    Returns:
+        (训练集, 测试集)
+    """
+    print(f"  OOT 时间切分: time_column={time_column}, cutoff={cutoff_date}")
+
+    # 检查时间列是否存在
+    if time_column not in df.columns:
+        raise ValueError(f"时间列 '{time_column}' 不存在")
+
+    # 转换时间列
+    df = df.with_columns(
+        pl.col(time_column).cast(pl.Datetime).alias("_time_col")
+    )
+
+    # 过滤无效时间
+    df_valid = df.filter(pl.col("_time_col").is_not_null())
+    null_count = len(df) - len(df_valid)
+    if null_count > 0:
+        print(f"  过滤时间列为空的行: {null_count}")
+
+    # 时间切分
+    cutoff = pl.lit(cutoff_date).str.to_datetime("%Y-%m-%d")
+    train_df = df_valid.filter(pl.col("_time_col") < cutoff).drop("_time_col")
+    test_df = df_valid.filter(pl.col("_time_col") >= cutoff).drop("_time_col")
+
+    print(f"  训练集: {len(train_df):,} 行 (时间 < {cutoff_date})")
+    print(f"  测试集: {len(test_df):,} 行 (时间 >= {cutoff_date})")
+
+    # 打印时间范围
+    train_min = train_df.select(pl.col(time_column).min()).item()
+    train_max = train_df.select(pl.col(time_column).max()).item()
+    test_min = test_df.select(pl.col(time_column).min()).item()
+    test_max = test_df.select(pl.col(time_column).max()).item()
+    print(f"  训练集时间范围: {train_min} ~ {train_max}")
+    print(f"  测试集时间范围: {test_min} ~ {test_max}")
+
+    # 打印目标分布（如果指定）
+    if target_column and target_column in train_df.columns:
+        train_dist = train_df.group_by(target_column).len().sort(target_column)
+        test_dist = test_df.group_by(target_column).len().sort(target_column)
+        print(f"  训练集分布: {train_dist.to_dict(as_series=False)}")
+        print(f"  测试集分布: {test_dist.to_dict(as_series=False)}")
+
+    return train_df, test_df
+
+
+def split_data_auto(
+    pl,
+    df: "pl.DataFrame",
+    time_column: str,
+    min_oot_days: int = 30,
+    test_ratio: float = 0.2,
+    random_seed: int = 42,
+    target_column: str = None,
+) -> tuple["pl.DataFrame", "pl.DataFrame", str]:
+    """
+    自动选择切分方式
+
+    检测时间跨度：
+    - 跨度 >= min_oot_days：使用 OOT 切分
+    - 跨度 < min_oot_days：使用随机切分
+
+    Args:
+        pl: polars 模块
+        df: 数据 DataFrame
+        time_column: 时间列名
+        min_oot_days: 触发 OOT 的最少天数
+        test_ratio: 随机切分时的测试集比例
+        random_seed: 随机种子
+        target_column: 目标变量列名
+
+    Returns:
+        (训练集, 测试集, 实际使用的模式)
+    """
+    print(f"  自动选择切分方式: min_oot_days={min_oot_days}")
+
+    # 检查时间列
+    if time_column not in df.columns:
+        print(f"  警告: 时间列 '{time_column}' 不存在，降级为随机切分")
+        train_df, test_df = split_data(pl, df, target_column, test_ratio, random_seed)
+        return train_df, test_df, "random"
+
+    # 计算时间跨度
+    df_time = df.with_columns(pl.col(time_column).cast(pl.Datetime).alias("_time"))
+    df_valid = df_time.filter(pl.col("_time").is_not_null())
+
+    if len(df_valid) == 0:
+        print(f"  警告: 时间列无有效数据，降级为随机切分")
+        train_df, test_df = split_data(pl, df, target_column, test_ratio, random_seed)
+        return train_df, test_df, "random"
+
+    min_time = df_valid.select(pl.col("_time").min()).item()
+    max_time = df_valid.select(pl.col("_time").max()).item()
+    time_span_days = (max_time - min_time).days
+
+    print(f"  时间跨度: {min_time} ~ {max_time} ({time_span_days} 天)")
+
+    if time_span_days >= min_oot_days:
+        # 使用 OOT 切分：按 80/20 时间比例
+        total_seconds = (max_time - min_time).total_seconds()
+        cutoff_seconds = total_seconds * (1 - test_ratio)
+        cutoff_date = (min_time + __import__('datetime').timedelta(seconds=cutoff_seconds)).strftime("%Y-%m-%d")
+
+        print(f"  触发 OOT 切分 (跨度 >= {min_oot_days} 天)")
+        train_df, test_df = split_data_oot(pl, df, time_column, cutoff_date, target_column)
+        return train_df, test_df, "oot"
+    else:
+        # 使用随机切分
+        print(f"  降级为随机切分 (跨度 < {min_oot_days} 天)")
+        train_df, test_df = split_data(pl, df, target_column, test_ratio, random_seed)
+        return train_df, test_df, "random"
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="合并线索宽表和 DMP 行为数据",
@@ -287,10 +444,48 @@ def main():
     parser.add_argument("--output", required=True, help="输出文件路径（拆分时为前缀）")
     parser.add_argument("--format", choices=["parquet", "csv"], default="parquet")
     parser.add_argument("--desensitize", action="store_true", help="启用数据脱敏")
+
+    # 拆分参数
     parser.add_argument("--split", action="store_true", help="拆分训练/测试集")
-    parser.add_argument("--split-target", default="线索评级结果", help="拆分目标列名（用于分层采样）")
-    parser.add_argument("--split-ratio", type=float, default=0.2, help="测试集比例（默认 0.2）")
-    parser.add_argument("--split-seed", type=int, default=42, help="随机种子（默认 42）")
+    parser.add_argument(
+        "--split-mode",
+        choices=["random", "oot", "auto"],
+        default="random",
+        help="拆分模式: random(随机), oot(时间切分), auto(自动选择，默认 random)"
+    )
+    parser.add_argument(
+        "--split-target",
+        default="线索评级结果",
+        help="目标列名（用于分层采样，random 模式）"
+    )
+    parser.add_argument(
+        "--split-ratio",
+        type=float,
+        default=0.2,
+        help="测试集比例（默认 0.2）"
+    )
+    parser.add_argument(
+        "--split-seed",
+        type=int,
+        default=42,
+        help="随机种子（默认 42）"
+    )
+    parser.add_argument(
+        "--split-time-column",
+        default="线索创建时间",
+        help="时间列名（OOT 模式，默认 '线索创建时间'）"
+    )
+    parser.add_argument(
+        "--split-cutoff",
+        default=None,
+        help="OOT 切分时间点（格式 YYYY-MM-DD，不指定则自动计算 80/20 比例）"
+    )
+    parser.add_argument(
+        "--split-min-oot-days",
+        type=int,
+        default=30,
+        help="自动模式下触发 OOT 的最少天数（默认 30）"
+    )
 
     args = parser.parse_args()
 
@@ -389,13 +584,52 @@ def main():
 
     # 6. 拆分数据集（可选）
     if args.split:
-        print(f"\n拆分数据集...")
-        train_df, test_df = split_data(
-            pl, result,
-            target_column=args.split_target,
-            test_ratio=args.split_ratio,
-            random_seed=args.split_seed,
-        )
+        print(f"\n拆分数据集 (模式: {args.split_mode})...")
+
+        if args.split_mode == "random":
+            # 随机分层切分
+            train_df, test_df = split_data(
+                pl, result,
+                target_column=args.split_target,
+                test_ratio=args.split_ratio,
+                random_seed=args.split_seed,
+            )
+
+        elif args.split_mode == "oot":
+            # OOT 时间切分
+            if args.split_cutoff:
+                cutoff = args.split_cutoff
+            else:
+                # 自动计算 80/20 时间比例
+                df_time = result.with_columns(
+                    pl.col(args.split_time_column).cast(pl.Datetime).alias("_time")
+                )
+                df_valid = df_time.filter(pl.col("_time").is_not_null())
+                min_time = df_valid.select(pl.col("_time").min()).item()
+                max_time = df_valid.select(pl.col("_time").max()).item()
+                total_seconds = (max_time - min_time).total_seconds()
+                cutoff_seconds = total_seconds * (1 - args.split_ratio)
+                cutoff = (min_time + __import__('datetime').timedelta(seconds=cutoff_seconds)).strftime("%Y-%m-%d")
+                print(f"  自动计算切分时间点: {cutoff}")
+
+            train_df, test_df = split_data_oot(
+                pl, result,
+                time_column=args.split_time_column,
+                cutoff_date=cutoff,
+                target_column=args.split_target,
+            )
+
+        else:  # auto
+            # 自动选择
+            train_df, test_df, actual_mode = split_data_auto(
+                pl, result,
+                time_column=args.split_time_column,
+                min_oot_days=args.split_min_oot_days,
+                test_ratio=args.split_ratio,
+                random_seed=args.split_seed,
+                target_column=args.split_target,
+            )
+            print(f"  实际使用模式: {actual_mode}")
 
         # 生成输出文件名
         output_dir = output_path.parent
