@@ -124,11 +124,13 @@ def run_step(
 
     print_step(step["description"], "running")
     print(f"  命令: {' '.join(cmd[:4])}...")
+    print()  # 空行，让子脚本输出更清晰
 
     start_time = time.time()
 
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        # 不捕获输出，让子脚本的进度实时显示
+        result = subprocess.run(cmd, text=True)
 
         elapsed = time.time() - start_time
 
@@ -140,11 +142,11 @@ def run_step(
                 "output": str(args.get(step["output_arg"], "")),
             }
         else:
-            print_step(step["description"], "error", result.stderr[:200])
+            print_step(step["description"], "error", f"退出码 {result.returncode}")
             return {
                 "status": "error",
                 "time": elapsed,
-                "error": result.stderr,
+                "error": f"退出码 {result.returncode}",
             }
 
     except Exception as e:
