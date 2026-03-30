@@ -57,6 +57,13 @@ uv run python scripts/merge_data.py \
     --dmp ./data/DMP行为数据.csv \
     --output ./data/线索宽表_完整.parquet
 
+# 启用脱敏处理（品牌关键词替换 + ID掩码）
+uv run python scripts/merge_data.py \
+    --excel ./data/线索宽表.xlsx \
+    --dmp ./data/DMP行为数据.csv \
+    --output ./data/线索宽表_脱敏.parquet \
+    --desensitize
+
 # 输出 CSV 格式
 uv run python scripts/merge_data.py \
     --excel ./data/线索宽表.xlsx \

@@ -6,20 +6,162 @@
 - 使用 calamine 引擎读取 Excel（更快更省内存）
 - 分批处理 DMP 数据
 - 流式写入
+- 支持数据脱敏
 
 用法：
     uv run python scripts/merge_data.py \
         --excel 测试数据/202601~03_v2.xlsx \
         --dmp 测试数据/DMP行为数据(202601~03).csv \
         --output 测试数据/线索宽表_完整.parquet
+
+    # 启用脱敏
+    uv run python scripts/merge_data.py \
+        --excel 测试数据/202601~03_v2.xlsx \
+        --dmp 测试数据/DMP行为数据(202601~03).csv \
+        --output 测试数据/线索宽表_脱敏.parquet \
+        --desensitize
 """
 
 import argparse
+import re
 import sys
 from pathlib import Path
 
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
+
+
+# ==================== 脱敏配置 ====================
+
+# 品牌关键词映射
+BRAND_MAPPING = {
+    "广汽丰田": "品牌A",
+    "广丰": "品牌A",
+    "广汽": "集团A",
+    "GTMC": "代号G",
+    "广汽本地": "区域A",
+}
+
+# 需要品牌关键词替换的文本字段
+BRAND_TEXT_COLUMNS = [
+    "首触意向车型/意向车型",
+    "一级渠道名称",
+    "二级渠道名称",
+    "三级渠道名称",
+    "四级渠道名称",
+    "首触跟进记录",
+    "非首触跟进记录",
+    "战败原因",
+    "dmp_品牌",
+    "dmp_车型代码",
+]
+
+# ID 字段掩码（保留前2后2位）
+ID_MASK_COLUMNS = [
+    "客户ID",
+    "客户ID(店端)",
+]
+
+
+def mask_id(value: str) -> str:
+    """ID 脱敏：保留前2后2位"""
+    if not value or len(value) <= 4:
+        return "****"
+    return f"{value[:2]}{'*' * (len(value) - 4)}{value[-2:]}"
+
+
+def mask_phone(value: str) -> str:
+    """手机号脱敏：保留前3后4位"""
+    if not value:
+        return value
+    # 匹配11位手机号
+    phone_pattern = re.compile(r"1[3-9]\d{9}")
+    return phone_pattern.sub(lambda m: f"{m.group()[:3]}****{m.group()[-4:]}", str(value))
+
+
+def mask_id_card(value: str) -> str:
+    """身份证脱敏：保留前6后4位"""
+    if not value:
+        return value
+    # 匹配15或18位身份证
+    id_pattern = re.compile(r"\d{15}[\dXx]?[\dXx]?[\dXx]?")
+    return id_pattern.sub(lambda m: f"{m.group()[:6]}********{m.group()[-4:]}", str(value))
+
+
+def replace_brand_keywords(text: str) -> str:
+    """替换品牌关键词"""
+    if not text:
+        return text
+    result = str(text)
+    for keyword, replacement in BRAND_MAPPING.items():
+        result = result.replace(keyword, replacement)
+    return result
+
+
+def desensitize_column(pl, series, col_name: str):
+    """
+    对单列进行脱敏处理
+
+    Args:
+        pl: polars 模块
+        series: polars Series
+        col_name: 列名
+
+    Returns:
+        脱敏后的 Series
+    """
+    # 品牌关键词替换
+    for keyword, replacement in BRAND_MAPPING.items():
+        series = series.str.replace_all(keyword, replacement)
+
+    # ID 字段掩码
+    if any(col in col_name for col in ["客户ID"]):
+        series = series.cast(pl.Utf8).map_elements(mask_id, return_dtype=pl.Utf8)
+
+    # 手机号脱敏（跟进记录等文本中可能包含）
+    if "跟进" in col_name or "战败" in col_name or "记录" in col_name:
+        # 文本中的手机号脱敏
+        series = series.map_elements(mask_phone, return_dtype=pl.Utf8)
+        # 身份证脱敏
+        series = series.map_elements(mask_id_card, return_dtype=pl.Utf8)
+
+    return series
+
+
+def desensitize_data(pl, df: "pl.DataFrame") -> "pl.DataFrame":
+    """
+    数据脱敏处理
+
+    Args:
+        pl: polars 模块
+        df: 原始 DataFrame
+
+    Returns:
+        脱敏后的 DataFrame
+    """
+    print("  执行脱敏处理...")
+
+    # 获取需要处理的列
+    text_columns = []
+    for col in df.columns:
+        # 文本类型且在脱敏列表中
+        if df[col].dtype == pl.Utf8:
+            # 品牌关键词替换
+            if any(kw in col for kw in ["车型", "渠道", "跟进", "战败", "品牌", "dmp_"]):
+                text_columns.append(col)
+            # ID 掩码
+            elif "客户ID" in col:
+                text_columns.append(col)
+
+    print(f"  待脱敏列数: {len(text_columns)}")
+
+    # 批量处理
+    for col in text_columns:
+        df = df.with_columns(
+            desensitize_column(pl, df[col], col).alias(col)
+        )
+
+    return df
 
 
 def main():
@@ -28,6 +170,7 @@ def main():
     parser.add_argument("--dmp", required=True, help="DMP 行为数据 CSV 路径")
     parser.add_argument("--output", required=True, help="输出文件路径")
     parser.add_argument("--format", choices=["parquet", "csv"], default="parquet")
+    parser.add_argument("--desensitize", action="store_true", help="启用数据脱敏")
 
     args = parser.parse_args()
 
@@ -118,7 +261,13 @@ def main():
     matched = result.filter(pl.col("dmp_行为次数").is_not_null()).height
     print(f"  匹配: {matched:,}/{len(clue_df):,} ({matched/len(clue_df)*100:.1f}%)")
 
-    # 5. 输出
+    # 5. 脱敏处理（可选）
+    if args.desensitize:
+        print("\n脱敏处理...")
+        result = desensitize_data(pl, result)
+        print("  已完成脱敏处理")
+
+    # 6. 输出
     output_path.parent.mkdir(parents=True, exist_ok=True)
     print(f"\n输出: {output_path}")
 

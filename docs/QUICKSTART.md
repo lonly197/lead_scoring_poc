@@ -161,18 +161,23 @@ uv run python scripts/merge_data.py \
     --dmp ./data/DMP行为数据.csv \
     --output ./data/线索宽表_完整.parquet
 
-# 输出 CSV 格式
+# 启用脱敏处理（品牌关键词替换 + ID掩码）
 uv run python scripts/merge_data.py \
     --excel ./data/线索宽表.xlsx \
     --dmp ./data/DMP行为数据.csv \
-    --output ./data/线索宽表_完整.csv \
-    --format csv
+    --output ./data/线索宽表_脱敏.parquet \
+    --desensitize
 ```
 
 **功能**：
 - 合并 Excel 多个数据 Sheet
 - 按手机号关联 DMP 行为数据
 - 聚合行为特征（行为次数、最近时间、试驾/下单相关次数等）
+
+**脱敏规则**（`--desensitize`）：
+- 品牌关键词：广汽丰田/广丰 → 品牌A，广汽 → 集团A，GTMC → 代号G
+- ID 字段：保留前2后2位（如 `AB****XY`）
+- 文本字段：手机号、身份证正则替换
 
 ---
 
