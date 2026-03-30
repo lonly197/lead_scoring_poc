@@ -42,6 +42,9 @@ lead_scoring_poc/
 │   └── config.py           # 配置管理（路径、参数、特征定义）
 │
 ├── src/
+│   ├── pipeline/           # 数据管道核心模块
+│   │   ├── utils.py        # 共享工具函数
+│   │   └── config.py       # 管道配置
 │   ├── data/
 │   │   ├── adapter.py      # 数据格式适配器
 │   │   ├── loader.py       # 数据加载、特征工程
@@ -63,6 +66,14 @@ lead_scoring_poc/
 │   ├── validate_model.py   # 二级入口：验证路由器
 │   ├── monitor.py          # 任务监控
 │   │
+│   ├── pipeline/           # 数据管道（推荐）
+│   │   ├── 01_merge.py     # 数据合并
+│   │   ├── 02_profile.py   # 数据探查
+│   │   ├── 03_clean.py     # 数据清洗
+│   │   ├── 04_desensitize.py # 数据脱敏
+│   │   ├── 05_split.py     # 数据拆分
+│   │   └── run_pipeline.py # 统一运行器
+│   │
 │   ├── train_ohab.py       # OHAB 评级训练
 │   ├── train_arrive.py     # 到店预测训练
 │   ├── train_test_drive.py # 试驾预测训练
@@ -72,7 +83,7 @@ lead_scoring_poc/
 │   ├── validate_test_drive_model.py  # 试驾验证
 │   ├── validate_ensemble.py          # 三模型验证
 │   │
-│   ├── merge_data.py       # 数据合并（线索宽表 + DMP）
+│   ├── merge_data.py       # 数据合并（旧版，保留兼容）
 │   ├── generate_topk.py    # Top-K 名单生成
 │   └── diagnose_data.py    # 数据诊断
 │
@@ -102,6 +113,29 @@ lead_scoring_poc/
 ### 3. 三模型集成训练
 
 训练 7/14/21 天试驾预测模型，通过概率阈值推导 H/A/B 评级（`src/inference/hab_deriver.py`）。
+
+### 4. 数据管道
+
+独立的数据处理流水线，每个步骤职责单一：
+
+```
+01_merge.py      → 02_profile.py  → 03_clean.py    → 04_desensitize.py → 05_split.py
+(合并)              (探查)           (清洗)           (脱敏)              (拆分)
+```
+
+| 步骤 | 功能 | 输入 | 输出 |
+|------|------|------|------|
+| merge | 合并 Excel + DMP | Excel, CSV | merged.parquet |
+| profile | 数据探查诊断 | parquet | profile.md |
+| clean | 数据清洗（异常值、偏斜、高基数） | parquet | cleaned.parquet |
+| desensitize | 数据脱敏（品牌、ID、手机号） | parquet | desensitized.parquet |
+| split | 数据拆分（random/oot/auto） | parquet | train.parquet, test.parquet |
+
+**高级清洗功能**：
+- 异常值检测（IQR/Z-Score）
+- 偏斜分布识别
+- 高基数列检测
+- 常量列删除
 
 ---
 

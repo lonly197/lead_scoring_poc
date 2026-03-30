@@ -26,6 +26,23 @@
 uv sync && cp .env.example .env
 
 # ====================
+# 数据管道（推荐）
+# ====================
+
+# 一键执行完整管道
+uv run python scripts/pipeline/run_pipeline.py \
+    --excel ./data/线索宽表.xlsx \
+    --dmp ./data/DMP行为数据.csv \
+    --output ./data/final
+
+# 跳过脱敏步骤
+uv run python scripts/pipeline/run_pipeline.py \
+    --excel ./data/线索宽表.xlsx \
+    --dmp ./data/DMP行为数据.csv \
+    --output ./data/final \
+    --skip desensitize
+
+# ====================
 # 数据加载模式
 # ====================
 
@@ -60,6 +77,23 @@ uv run python scripts/run.py monitor status
 
 # 停止所有任务
 uv run python scripts/run.py monitor stop --all
+```
+
+## 数据管道架构
+
+```
+scripts/pipeline/
+├── 01_merge.py        # 数据合并（Excel + DMP）
+├── 02_profile.py      # 数据探查（缺失值、分布、建议）
+├── 03_clean.py        # 数据清洗（异常值、偏斜、高基数）
+├── 04_desensitize.py  # 数据脱敏（品牌、ID、手机号）
+├── 05_split.py        # 数据拆分（random/oot/auto）
+└── run_pipeline.py    # 统一运行器
+```
+
+**管道流程**：
+```
+Excel + DMP → merged.parquet → profile.md → cleaned.parquet → desensitized.parquet → train/test.parquet
 ```
 
 ## 入口架构

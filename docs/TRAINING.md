@@ -21,11 +21,12 @@
 
 ### 核心脚本列表
 
-| 脚本 | 目标变量 | 任务类型 | 核心特性 |
-|------|----------|----------|----------|
-| `train_arrive.py` | `到店标签_14天` | 二分类 | 智能自适应 OOT/随机切分，输出 Top-K/Lift |
-| `train_ohab.py` | `线索评级结果` | HAB 评级 | 默认随机分组切分、两阶段 `H vs 非H + A vs B`、多类别权重平衡、默认输出结构化解释产物 |
-| `train_test_drive.py` | `试驾标签_14天` | 二分类 | 支持所有特征工程与自适应切分 |
+| 脚本 | 目标变量 | 任务类型 | 说明 |
+|------|----------|----------|------|
+| `train_arrive.py` | `到店标签_14天` | 二分类 | 智能自适应切分，输出 Top-K/Lift |
+| `train_ohab.py` | `线索评级结果` | HAB 评级 | 两阶段流水线，多类别权重平衡 |
+| `train_test_drive.py` | `试驾标签_14天` | 二分类 | 智能自适应切分 |
+| `train_test_drive_ensemble.py` | `试驾标签_7/14/21天` | 三模型集成 | 从概率推导 H/A/B 评级 |
 
 ---
 
@@ -45,21 +46,41 @@
 推荐通过 `run.py` 统一入口进行调用，支持参数透传：
 
 ```bash
-# 到店预测训练典型调用
-uv run python scripts/run.py train_arrive --daemon \
-    --data-path ./data/202602_03.csv \      # 数据文件路径
-    --target 到店标签_14天 \               # 目标变量
-    --preset high_quality \                # 模型预设
-    --time-limit 3600 \                    # 训练时间限制（秒）
-    --num-bag-folds 5                      # 交叉验证折数
-    --output-dir ./outputs/models/arrive_model
+# 到店预测训练
+uv run python scripts/run.py train arrive --daemon \
+    --data-path ./data/202602_03.csv \
+    --preset high_quality \
+    --time-limit 3600
 
-# OHAB 评级任务透传 O 级合并参数
-uv run python scripts/run.py train_ohab --daemon \
-    --data-path ./data/202603.tsv \
-    --o-merge-threshold 60 \
-    --report-topk 10,20,30
+# OHAB 评级训练
+uv run python scripts/run.py train ohab --daemon \
+    --data-path ./data/202603.tsv
+
+# 三模型集成训练（顺序模式，16GB 推荐）
+uv run python scripts/run.py train ensemble --daemon
+
+# 三模型并行训练（32GB+ 服务器）
+uv run python scripts/run.py train ensemble --daemon --parallel
+
+# 提前拆分数据文件（优先级高于 --data-path）
+uv run python scripts/run.py train test_drive --daemon \
+    --train-path ./data/train.parquet \
+    --test-path ./data/test.parquet
+
+# 仅训练 CatBoost（推荐）
+uv run python scripts/run.py train test_drive --daemon \
+    --included-model-types CAT
 ```
+
+### 关键参数说明
+
+| 参数 | 说明 |
+|------|------|
+| `--train-path` | 训练集文件（提前拆分模式，支持 .parquet/.csv/.tsv） |
+| `--test-path` | 测试集文件（提前拆分模式） |
+| `--parallel` | 并行训练三模型（仅 ensemble 任务，需 32GB+ 内存） |
+| `--max-workers` | 并行进程数（默认 3） |
+| `--included-model-types` | 指定模型类型（如 `CAT` 仅训练 CatBoost） |
 
 ---
 
@@ -68,7 +89,7 @@ uv run python scripts/run.py train_ohab --daemon \
 当前 `202602~03.tsv` 规模接近 48 万行。对 16GB 内存服务器，推荐使用 `server_16g_compare` 档位。
 
 ```bash
-uv run python scripts/run.py train_ohab --daemon \
+uv run python scripts/run.py train ohab --daemon \
     --data-path ./data/202602~03.tsv \
     --training-profile server_16g_compare
 ```
@@ -91,7 +112,7 @@ uv run python scripts/run.py train_ohab --daemon \
 如果需要验证“训练阶段直接按业务更关注的 `balanced_accuracy` 选模型”是否会优于当前默认档，可使用受控实验档：
 
 ```bash
-uv run python scripts/run.py train_ohab --daemon \
+uv run python scripts/run.py train ohab --daemon \
     --data-path ./data/202602~03.tsv \
     --training-profile server_16g_compare_balanced \
     --train-end 2026-03-15 \
@@ -113,7 +134,7 @@ uv run python scripts/run.py train_ohab --daemon \
 如果只想验证神经网络模型是否有增益，不要直接把 `FASTAI` 和所有非树模型一起放开。推荐使用单变量实验档：
 
 ```bash
-uv run python scripts/run.py train_ohab --daemon \
+uv run python scripts/run.py train ohab --daemon \
     --data-path ./data/202602~03.tsv \
     --training-profile server_16g_probe_nn_torch \
     --train-end 2026-03-15 \
@@ -131,28 +152,39 @@ uv run python scripts/run.py train_ohab --daemon \
 
 ---
 
-## 模型验证 (validate_model)
+## 模型验证
 
-验证模型在测试集上的表现。
+验证脚本已拆分为独立文件，按模型类型调用：
 
-### 基础验证
+| 脚本 | 用途 |
+|------|------|
+| `validate_ohab_model.py` | OHAB 评级验证 |
+| `validate_test_drive_model.py` | 试驾预测验证 |
+| `validate_ensemble.py` | 三模型集成验证 |
+
+### 统一入口调用
+
 ```bash
-uv run python scripts/validate_model.py \
-    --model-path ./outputs/models/ohab_model \
-    --data-path ./data/202603.tsv
+# 验证模型（自动识别类型）
+uv run python scripts/run.py validate \
+    --model-path ./outputs/models/ohab_model
+
+# 指定测试集（提前拆分模式）
+uv run python scripts/run.py validate \
+    --model-path ./outputs/models/test_drive_model \
+    --test-path ./data/test.parquet
 ```
 
-> 当前默认两阶段流水线会输出统一主结果，常用文件为 `predictions_best.csv`、`hab_bucket_summary_best.csv`、`evaluation_summary.json`。
-> 只有切回单阶段并保留模型对比时，才会额外输出 `baseline/best` 的技术对比文件。
-
-### 进阶：显式 OOT 验证（防泄露）
-在训练阶段显式使用时间切分后，如需强制仅评估 `valid_end` 之后的数据，可开启 `--oot-test`：
+### 直接调用验证脚本
 
 ```bash
-uv run python scripts/validate_model.py \
+# OHAB 验证
+uv run python scripts/validate_ohab_model.py \
     --model-path ./outputs/models/ohab_model \
-    --data-path ./data/202603.tsv \
-    --oot-test \
-    --train-end 2026-03-11 \
-    --valid-end 2026-03-16
+    --data-path ./data/202603.tsv
+
+# 三模型集成验证
+uv run python scripts/validate_ensemble.py \
+    --model-path ./outputs/models/test_drive_ensemble \
+    --data-path ./data/202603.tsv
 ```

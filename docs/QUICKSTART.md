@@ -150,7 +150,112 @@ uv run python scripts/monitor.py stop --all
 
 ---
 
-## 数据合并
+## 数据管道（推荐）
+
+推荐使用数据管道进行分步处理，每个步骤职责单一：
+
+### 管道流程
+
+```
+01_merge.py      → 02_profile.py  → 03_clean.py    → 04_desensitize.py → 05_split.py
+(合并)              (探查)           (清洗)           (脱敏)              (拆分)
+```
+
+### 一键执行完整管道
+
+```bash
+# 完整管道
+uv run python scripts/pipeline/run_pipeline.py \
+    --excel ./data/线索宽表.xlsx \
+    --dmp ./data/DMP行为数据.csv \
+    --output ./data/final
+
+# 跳过脱敏步骤
+uv run python scripts/pipeline/run_pipeline.py \
+    --excel ./data/线索宽表.xlsx \
+    --dmp ./data/DMP行为数据.csv \
+    --output ./data/final \
+    --skip desensitize
+```
+
+### 单步执行
+
+```bash
+# 1. 数据合并
+uv run python scripts/pipeline/01_merge.py \
+    --excel ./data/线索宽表.xlsx \
+    --dmp ./data/DMP行为数据.csv \
+    --output ./data/merged.parquet
+
+# 2. 数据探查
+uv run python scripts/pipeline/02_profile.py \
+    --input ./data/merged.parquet \
+    --target 线索评级结果 \
+    --output ./reports/profile.md
+
+# 3. 数据清洗（包含高级清洗）
+uv run python scripts/pipeline/03_clean.py \
+    --input ./data/merged.parquet \
+    --output ./data/cleaned.parquet \
+    --report ./reports/clean_report.md
+
+# 4. 数据脱敏
+uv run python scripts/pipeline/04_desensitize.py \
+    --input ./data/cleaned.parquet \
+    --output ./data/desensitized.parquet
+
+# 5. 数据拆分
+uv run python scripts/pipeline/05_split.py \
+    --input ./data/desensitized.parquet \
+    --output ./data/final \
+    --mode oot \
+    --time-column 线索创建时间
+
+# 输出: final_train.parquet, final_test.parquet
+```
+
+### 单步执行（通过统一运行器）
+
+```bash
+# 仅运行清洗步骤
+uv run python scripts/pipeline/run_pipeline.py \
+    --step clean \
+    --input ./data/merged.parquet \
+    --output ./data/cleaned.parquet
+
+# 仅运行拆分步骤（带额外参数）
+uv run python scripts/pipeline/run_pipeline.py \
+    --step split \
+    --input ./data/desensitized.parquet \
+    --output ./data/final \
+    -- --mode oot --time-column 线索创建时间
+```
+
+### 数据清洗参数
+
+| 参数 | 说明 | 默认值 |
+|------|------|--------|
+| `--drop-high-missing` | 删除高缺失列 | True |
+| `--high-missing-threshold` | 高缺失阈值 | 0.5 |
+| `--detect-outliers` | 检测异常值 | True |
+| `--outlier-method` | 异常值检测方法（iqr/zscore） | iqr |
+| `--handle-skewed` | 检测偏斜分布 | True |
+| `--skew-threshold` | 偏斜阈值 | 1.0 |
+| `--high-cardinality-threshold` | 高基数阈值 | 100 |
+
+### 数据拆分模式
+
+| 模式 | 说明 | 适用场景 |
+|------|------|----------|
+| `random` | 随机分层切分，保持目标分布 | 数据量少、时间跨度小 |
+| `oot` | 时间切分（Out-of-Time），用历史预测未来 | 3个月以上数据，模拟真实部署 |
+| `auto` | 自动判断：跨度≥30天用OOT，否则用随机 | 不确定时使用 |
+
+---
+
+## 数据合并（旧版）
+
+> **注意**: 推荐使用上方的新数据管道。以下为旧版 `merge_data.py` 的用法。
 
 合并线索宽表和 DMP 行为数据：
 
