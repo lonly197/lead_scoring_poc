@@ -51,7 +51,19 @@ def parse_args():
         "--data-path",
         type=str,
         default=None,
-        help="数据文件路径",
+        help="数据文件路径（动态拆分模式）",
+    )
+    parser.add_argument(
+        "--train-path",
+        type=str,
+        default=None,
+        help="训练集文件路径（提前拆分模式，优先级高于 --data-path）",
+    )
+    parser.add_argument(
+        "--test-path",
+        type=str,
+        default=None,
+        help="测试集文件路径（提前拆分模式，优先级高于 --data-path）",
     )
     parser.add_argument(
         "--target",
@@ -121,6 +133,12 @@ def parse_args():
         default=False,
         help="生成 PNG 图表（默认关闭，服务器 CLI 环境建议保持关闭）",
     )
+    parser.add_argument(
+        "--included-model-types",
+        type=str,
+        default=None,
+        help="指定训练的模型类型（逗号分隔），如 CAT,GBM。空值使用默认预设所有模型",
+    )
 
     return parser.parse_args()
 
@@ -129,8 +147,12 @@ def main():
     """主函数"""
     args = parse_args()
 
-    # 配置路径
+    # 判断数据加载模式
+    train_path = args.train_path or config.data.train_data_path
+    test_path = args.test_path or config.data.test_data_path
+    use_split_data = train_path and test_path
     data_path = args.data_path or config.data.data_path
+
     target_label = args.target
     output_dir = Path(args.output_dir or config.output.models_dir) / "test_drive_model"
     log_dir = Path(args.log_dir)
@@ -170,7 +192,13 @@ def main():
     logger.info(f"训练开始时间: {train_start_time.strftime('%Y-%m-%d %H:%M:%S%z')}")
     logger.info(f"进程 ID: {os.getpid()}")
     logger.info(f"日志文件: {log_file}")
-    logger.info(f"数据路径: {data_path}")
+    if use_split_data:
+        logger.info(f"数据加载模式: 提前拆分")
+        logger.info(f"训练集路径: {train_path}")
+        logger.info(f"测试集路径: {test_path}")
+    else:
+        logger.info(f"数据加载模式: 动态拆分")
+        logger.info(f"数据路径: {data_path}")
     logger.info(f"目标变量: {target_label}")
     logger.info(f"输出目录: {output_dir}")
 
@@ -185,18 +213,59 @@ def main():
     try:
         # 1. 加载数据
         logger.info("步骤 1/6: 加载数据")
-        loader = DataLoader(data_path, auto_adapt=True)
-        df = loader.load()
-        quality = check_data_quality(df)
-        logger.info(f"数据: {quality['total_rows']} 行, {quality['total_columns']} 列")
 
-        # 2. 特征工程
-        logger.info("步骤 2/6: 特征工程")
-        feature_engineer = FeatureEngineer(
-            time_columns=config.feature.time_columns,
-            numeric_columns=config.feature.numeric_features,
-        )
-        df_processed, feature_metadata = feature_engineer.process(df)
+        # 判断数据加载模式：优先使用提前拆分的数据文件
+        train_path = args.train_path or config.data.train_data_path
+        test_path = args.test_path or config.data.test_data_path
+        use_split_data = train_path and test_path
+
+        if use_split_data:
+            # 模式一：提前拆分的数据文件
+            logger.info(f"使用提前拆分的数据文件（训练集: {train_path}, 测试集: {test_path}）")
+            train_loader = DataLoader(train_path, auto_adapt=True)
+            test_loader = DataLoader(test_path, auto_adapt=True)
+            df_train = train_loader.load()
+            df_test = test_loader.load()
+
+            # 特征工程（训练集 fit_transform，测试集 transform）
+            logger.info("步骤 2/6: 特征工程")
+            feature_engineer = FeatureEngineer(
+                time_columns=config.feature.time_columns,
+                numeric_columns=config.feature.numeric_features,
+            )
+            train_df, feature_metadata = feature_engineer.fit_transform(df_train)
+            test_df, _ = feature_engineer.transform(df_test, interaction_context=feature_metadata.get("interaction_context"))
+
+            quality_train = check_data_quality(train_df)
+            quality_test = check_data_quality(test_df)
+            logger.info(f"训练集: {quality_train['total_rows']} 行, {quality_train['total_columns']} 列")
+            logger.info(f"测试集: {quality_test['total_rows']} 行, {quality_test['total_columns']} 列")
+        else:
+            # 模式二：动态拆分
+            data_path = args.data_path or config.data.data_path
+            logger.info(f"使用单一数据文件，动态拆分: {data_path}")
+            loader = DataLoader(data_path, auto_adapt=True)
+            df = loader.load()
+            quality = check_data_quality(df)
+            logger.info(f"数据: {quality['total_rows']} 行, {quality['total_columns']} 列")
+
+            # 特征工程
+            logger.info("步骤 2/6: 特征工程")
+            feature_engineer = FeatureEngineer(
+                time_columns=config.feature.time_columns,
+                numeric_columns=config.feature.numeric_features,
+            )
+            df_processed, feature_metadata = feature_engineer.process(df)
+
+            # 数据划分
+            logger.info("步骤 3/6: 数据划分")
+            train_df, test_df = split_data(
+                df_processed,
+                target_label=target_label,
+                test_size=args.test_size,
+                stratify=True,
+            )
+            logger.info(f"训练集: {len(train_df)}, 测试集: {len(test_df)}")
 
         # 保存特征工程元数据（时间特征信息）
         import json
@@ -205,16 +274,6 @@ def main():
         with open(feature_metadata_path, "w", encoding="utf-8") as f:
             json.dump(feature_metadata, f, ensure_ascii=False, indent=2)
         logger.info(f"特征元数据已保存: {feature_metadata_path}")
-
-        # 3. 数据划分
-        logger.info("步骤 3/6: 数据划分")
-        train_df, test_df = split_data(
-            df_processed,
-            target_label=target_label,
-            test_size=args.test_size,
-            stratify=True,
-        )
-        logger.info(f"训练集: {len(train_df)}, 测试集: {len(test_df)}")
 
         # 4. 训练模型
         logger.info("步骤 4/6: 模型训练")
@@ -225,6 +284,12 @@ def main():
         if args.exclude_memory_heavy_models:
             excluded_model_types = ["KNN", "RF", "XT"]
             logger.info("排除内存密集型模型: KNN, RF, XT")
+
+        # 指定训练的模型类型（白名单模式）
+        included_model_types = None
+        if args.included_model_types:
+            included_model_types = [t.strip() for t in args.included_model_types.split(",")]
+            logger.info(f"指定训练模型类型: {included_model_types}")
 
         predictor = LeadScoringPredictor(
             label=target_label,
@@ -238,6 +303,7 @@ def main():
             max_memory_usage_ratio=args.max_memory_ratio,
             excluded_model_types=excluded_model_types,
             num_folds_parallel=args.num_folds_parallel,
+            included_model_types=included_model_types,
         )
         logger.info("启用类别权重自动平衡 (sample_weight='balance_weight')")
 

@@ -82,6 +82,8 @@ class LeadScoringPredictor:
         fit_strategy: Optional[str] = None,
         excluded_model_types: Optional[List[str]] = None,
         num_folds_parallel: Optional[int] = None,
+        # 模型选择参数
+        included_model_types: Optional[List[str]] = None,
     ):
         """
         初始化预测器
@@ -102,6 +104,12 @@ class LeadScoringPredictor:
             fit_strategy: 模型级训练策略（sequential/parallel）
             excluded_model_types: 排除的模型类型列表（内存密集型：KNN, RF, XT）
             num_folds_parallel: 并行训练的 fold 数量（None=自动，低内存机器建议 1）
+            included_model_types: 指定训练的模型类型列表（白名单模式）
+                - None: 使用默认预设中的所有模型
+                - ['CAT']: 只训练 CatBoost
+                - ['GBM']: 只训练 LightGBM
+                - ['XGB']: 只训练 XGBoost
+                - ['CAT', 'GBM']: 训练 CatBoost 和 LightGBM
         """
         self.label = label
         self.output_path = Path(output_path)
@@ -114,6 +122,7 @@ class LeadScoringPredictor:
         self.fit_strategy = fit_strategy
         self.excluded_model_types = excluded_model_types
         self.num_folds_parallel = num_folds_parallel
+        self.included_model_types = included_model_types
 
         self._predictor = None
         self._feature_metadata = None
@@ -344,6 +353,12 @@ class LeadScoringPredictor:
             fit_kwargs["excluded_model_types"] = self.excluded_model_types
             logger.info(f"排除模型类型: {self.excluded_model_types}")
 
+        # 指定训练的模型类型（白名单模式）
+        if self.included_model_types:
+            hyperparameters = {model_type: {} for model_type in self.included_model_types}
+            fit_kwargs["hyperparameters"] = hyperparameters
+            logger.info(f"指定训练模型类型: {self.included_model_types}")
+
         # 限制并行 fold 数量
         if self.num_folds_parallel is not None:
             ag_args_ensemble = dict(fit_kwargs.get("ag_args_ensemble") or {})
@@ -461,7 +476,7 @@ class LeadScoringPredictor:
 
     def get_positive_proba(self, data: pd.DataFrame, model: Optional[str] = None) -> np.ndarray:
         """
-        获取正类概率（用于二分类 Top-K 排序）
+        获取正类概率。对于多分类模型，返回预测类别的最大概率（置信度）。
 
         Args:
             data: 输入数据

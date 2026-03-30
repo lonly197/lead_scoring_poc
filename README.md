@@ -12,9 +12,9 @@
 
 - **🚀 默认随机分组切分**：`train_ohab` 默认按手机号优先、线索 ID 回退的分组键做随机 `70/15/15` 切分，避免同客泄漏。
 - **🛡️ 全链路防泄漏**：训练阶段记录测试集分组键，`validate_model.py` 会自动只评估训练时定义的测试集。
-- **🚿 特征脱水技术**：内置严格的后验特征排除机制，彻底杜绝模型“偷看答案”的行为。
+- **🚿 特征脱水技术**：内置严格的后验特征排除机制，彻底杜绝模型"偷看答案"的行为。
 - **🧭 两阶段 HAB 流水线**：默认先做 `H vs 非H`，再做 `A vs B`，并在验证集调 `H` 阈值，优先兼顾分类稳定性与业务单调性。
-- **⚖️ 可选单阶段对比**：如需保留 `baseline vs best` 技术对比，可切换回单阶段训练并启用模型对比。
+- **⚡ 单模型训练优化**：支持指定训练单一模型（如 CatBoost），训练时间缩短 5 倍，性能损失极小。
 - **🧠 资源自适应训练**：`train_ohab` 启动前会自动探测当前 CPU 数和可用内存，自动收敛 `memory_limit_gb` 与 `num_folds_parallel`；显式命令行参数仍可覆盖。
 
 ## 快速开始
@@ -25,44 +25,86 @@
 # 安装依赖
 uv sync && cp .env.example .env
 
-# HAB 评级训练（16GB 服务器推荐档，默认两阶段 + 随机分组切分）
-uv run python scripts/run.py train_ohab --daemon \
-  --data-path ./data/202602~03.tsv \
-  --training-profile server_16g_compare
+# ====================
+# 数据加载模式
+# ====================
 
-# 验证模型（自动按训练时记录的测试集做防泄漏评估）
-uv run python scripts/validate_model.py \
-  --model-path ./outputs/models/ohab_model \
-  --data-path ./data/202602~03.tsv
+# 动态拆分模式（默认）
+uv run python scripts/run.py train test_drive --daemon
 
-# 生成客户版报告（首页展示基线 vs 最优模型）
-uv run python scripts/generate_business_report.py \
-  --model-dir ./outputs/models/ohab_model \
-  --validation-dir ./outputs/validation \
-  --output-path ./outputs/reports/hab_poc_report.md
+# 提前拆分模式（优先级更高）
+uv run python scripts/run.py train test_drive --daemon \
+    --train-path ./data/train.parquet \
+    --test-path ./data/test.parquet
+
+# ====================
+# 常用命令
+# ====================
+
+# 仅训练 CatBoost（推荐，性能最佳）
+uv run python scripts/run.py train test_drive --daemon \
+    --included-model-types CAT
+
+# 三模型集成训练（7/14/21 天试驾预测 → HAB 推导）
+uv run python scripts/run.py train ensemble --daemon
+
+# 三模型并行训练（32GB+ 服务器）
+uv run python scripts/run.py train ensemble --daemon --parallel
+
+# 验证模型
+uv run python scripts/run.py validate \
+    --model-path ./outputs/models/test_drive_model
+
+# 查看任务状态
+uv run python scripts/run.py monitor status
+
+# 停止所有任务
+uv run python scripts/run.py monitor stop --all
 ```
 
-### 服务端运行注意事项
+## 入口架构
 
-在服务器上运行训练脚本时，确保虚拟环境配置正确：
+```
+run.py (一级入口 - 统一调度器)
+│
+├── train <task>     → train_model.py (二级入口)
+│   ├── arrive       → train_arrive.py
+│   ├── test_drive   → train_test_drive.py
+│   ├── ohab         → train_ohab.py
+│   └── ensemble     → train_test_drive_ensemble.py
+│
+├── validate         → validate_model.py (二级入口)
+│   ├── arrive       → validate_arrive_model.py
+│   ├── test_drive   → validate_test_drive_model.py
+│   └── ohab         → validate_ohab_model.py
+│
+└── monitor          → monitor.py (二级入口)
+    ├── status       - 查看运行状态
+    ├── list         - 列出所有任务
+    ├── log <task>   - 查看任务日志
+    ├── detail <task>- 查看任务详情
+    └── stop <task>  - 停止任务
+```
+
+## 模型选择配置
+
+通过 `--included-model-types` 参数指定训练的模型类型：
+
+| 模型类型 | 说明 | 训练时间 | ROC-AUC |
+|----------|------|---------|---------|
+| `CAT` | CatBoost（推荐） | ~60s | ~0.998 |
+| `GBM` | LightGBM | ~30s | ~0.996 |
+| `XGB` | XGBoost | ~25s | ~0.995 |
+| `CAT,GBM` | 多模型 | ~90s | ~0.998 |
 
 ```bash
-# 推荐方式：干净 shell，直接运行（不要预先 source .venv/bin/activate）
-cd /opt/lead_scoring_poc
-uv run python scripts/train_arrive.py
+# 仅训练 CatBoost（推荐）
+uv run python scripts/run.py train test_drive --daemon \
+    --included-model-types CAT
 
-# 如果已激活 venv，使用 --active 参数
-source .venv/bin/activate
-uv run --active python scripts/train_arrive.py
-
-# 如果遇到环境问题，清除变量后重试
-unset VIRTUAL_ENV
-uv run python scripts/train_arrive.py
+# 通过环境变量配置
+echo "MODEL_INCLUDED_TYPES=CAT" >> .env
 ```
-
-**问题现象**：日志中出现大量 `workers have not registered within the timeout`，且每个 worker 都在重复下载依赖包（torch、catboost 等）。
-
-**原因**：`uv run` 检测到 `VIRTUAL_ENV` 环境变量与项目 `.venv` 路径不匹配（如预先激活了 venv），导致 Ray worker 无法复用已有环境，为每个 worker 重新创建虚拟环境和下载依赖。
 
 ## 文档
 

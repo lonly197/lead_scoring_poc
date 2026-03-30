@@ -39,11 +39,20 @@ def _optional_env_int(key: str) -> int | None:
 class DataConfig:
     """数据配置"""
 
-    # 数据文件路径
+    # 数据文件路径（动态拆分模式）
     data_path: str = field(
         default_factory=lambda: os.getenv(
             "DATA_PATH", "./data/20260308-v2.csv"
         )
+    )
+
+    # 提前拆分的数据路径（优先级更高）
+    # 若配置了这两个路径，将优先使用提前拆分的数据文件
+    train_data_path: str | None = field(
+        default_factory=lambda: os.getenv("TRAIN_DATA_PATH") or None
+    )
+    test_data_path: str | None = field(
+        default_factory=lambda: os.getenv("TEST_DATA_PATH") or None
     )
 
     # 通用随机切分比例（旧训练脚本/通用脚本仍可能使用）
@@ -64,6 +73,10 @@ class DataConfig:
     data_format: str = field(
         default_factory=lambda: os.getenv("DATA_FORMAT", "auto")
     )
+
+    def has_split_data(self) -> bool:
+        """检查是否配置了提前拆分的数据路径"""
+        return self.train_data_path is not None and self.test_data_path is not None
 
 
 @dataclass
@@ -88,6 +101,14 @@ class ModelConfig:
     # 通用任务默认目标变量
     target_label: str = field(
         default_factory=lambda: os.getenv("TARGET_LABEL", "到店标签_14天")
+    )
+
+    # 指定训练的模型类型（白名单模式）
+    # 可选值: CAT (CatBoost), GBM (LightGBM), XGB (XGBoost), RF (RandomForest), etc.
+    # 多个模型用逗号分隔，如 "CAT,GBM"
+    # 空值表示使用默认预设中的所有模型
+    included_model_types: str = field(
+        default_factory=lambda: os.getenv("MODEL_INCLUDED_TYPES", "")
     )
 
 
@@ -151,6 +172,24 @@ class OHABConfig:
     )
     feature_profile: str = field(
         default_factory=lambda: os.getenv("OHAB_FEATURE_PROFILE", "auto_scorecard")
+    )
+
+
+@dataclass
+class EnsembleConfig:
+    """三模型集成训练配置（7/14/21 天试驾预测）"""
+
+    # 是否并行训练三个模型
+    # true = 并行训练（需 32GB+ 内存）
+    # false = 顺序训练（16GB 内存推荐）
+    parallel_training: bool = field(
+        default_factory=lambda: os.getenv("ENSEMBLE_PARALLEL_TRAINING", "false").lower() in {"1", "true", "yes", "y", "on"}
+    )
+
+    # 并行训练的最大进程数
+    # 建议：32GB 内存设为 3，24GB 内存设为 2
+    max_workers: int = field(
+        default_factory=lambda: int(os.getenv("ENSEMBLE_MAX_WORKERS", "3"))
     )
 
 
@@ -335,6 +374,7 @@ class Config:
     data: DataConfig = field(default_factory=DataConfig)
     model: ModelConfig = field(default_factory=ModelConfig)
     ohab: OHABConfig = field(default_factory=OHABConfig)
+    ensemble: EnsembleConfig = field(default_factory=EnsembleConfig)
     feature: FeatureConfig = field(default_factory=FeatureConfig)
     output: OutputConfig = field(default_factory=OutputConfig)
 

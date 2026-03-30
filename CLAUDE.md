@@ -8,38 +8,115 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 # 安装依赖
 uv sync
 
-# 训练模型（核心任务）
-uv run python scripts/train_arrive.py --data-path ./data/your_data.csv
-uv run python scripts/run.py train_arrive_oot --data-path ./data/202603.tsv  # OOT 验证（兼容任务名）
+# ====================
+# 数据加载模式
+# ====================
 
-# 后台运行长时间训练
-uv run python scripts/run.py train_arrive --daemon
+# 动态拆分模式（默认）
+uv run python scripts/run.py train test_drive --daemon
 
-# 监控后台任务
-uv run python scripts/monitor.py status
-uv run python scripts/monitor.py log train_arrive -f
-uv run python scripts/monitor.py stop --all
+# 提前拆分模式（支持 .csv/.tsv/.parquet）
+uv run python scripts/run.py train test_drive --daemon \
+    --train-path ./data/train.parquet \
+    --test-path ./data/test.parquet
 
-# 数据诊断（调试列映射问题）
+# ====================
+# 常用训练命令
+# ====================
+
+# 仅训练 CatBoost（推荐）
+uv run python scripts/run.py train test_drive --daemon \
+    --included-model-types CAT
+
+# 三模型集成训练
+uv run python scripts/run.py train ensemble --daemon
+
+# 三模型并行训练（32GB+ 服务器）
+uv run python scripts/run.py train ensemble --daemon --parallel
+
+# 验证模型
+uv run python scripts/run.py validate \
+    --model-path ./outputs/models/test_drive_model
+
+# 监控任务
+uv run python scripts/run.py monitor status
+uv run python scripts/run.py monitor log train_test_drive -f
+uv run python scripts/run.py monitor stop --all
+
+# 数据诊断
 uv run python scripts/diagnose_data.py ./data/202603.tsv
-
-# 生成 Top-K 名单
-uv run python scripts/generate_topk.py --model-path ./outputs/models/arrive_model --k 100 500
 ```
 
-## 架构要点
+# ====================
+# 数据合并（线索宽表 + DMP 行为）
+# ====================
+
+# 合并 Excel 多 Sheet + 关联 DMP 行为数据
+uv run python scripts/merge_data.py \
+    --excel ./data/线索宽表.xlsx \
+    --dmp ./data/DMP行为数据.csv \
+    --output ./data/线索宽表_完整.parquet
+
+# 输出 CSV 格式
+uv run python scripts/merge_data.py \
+    --excel ./data/线索宽表.xlsx \
+    --dmp ./data/DMP行为数据.csv \
+    --output ./data/线索宽表_完整.csv \
+    --format csv
+```
+
+## 入口架构
+
+```
+run.py (一级入口)
+├── train <task>     → train_model.py (二级入口)
+│   ├── arrive       → train_arrive.py
+│   ├── test_drive   → train_test_drive.py
+│   ├── ohab         → train_ohab.py
+│   └── ensemble     → train_test_drive_ensemble.py
+└── validate         → validate_model.py (二级入口)
+    ├── arrive       → validate_arrive_model.py
+    ├── test_drive   → validate_test_drive_model.py
+    └── ohab         → validate_ohab_model.py
+```
+
+## 模型选择配置
+
+### 指定训练模型类型（提升效率）
+
+通过 `--included-model-types` 参数可指定训练的模型类型：
+
+| 模型类型 | 说明 | 训练时间 | ROC-AUC |
+|----------|------|---------|---------|
+| `CAT` | CatBoost（推荐） | ~60s | ~0.998 |
+| `GBM` | LightGBM | ~30s | ~0.996 |
+| `XGB` | XGBoost | ~25s | ~0.995 |
+| `CAT,GBM` | 多模型 | ~90s | ~0.998 |
+
+### 配置方式
+
+**方式一：命令行参数**
+```bash
+uv run python scripts/run.py train test_drive --daemon \
+    --included-model-types CAT
+```
+
+**方式二：环境变量（.env 文件）**
+```bash
+# .env
+MODEL_INCLUDED_TYPES=CAT
+```
 
 ### 训练脚本优先级
 
 ```
-train_arrive.py      → 核心任务（到店预测）
-train_ohab.py        → 辅助任务（OHAB 评级）
-train_test_drive.py  → 辅助任务（试驾预测）
+train_test_drive.py      → 核心任务（到店预测）
+train_test_drive_ensemble.py → 三模型集成（7/14/21天试驾预测）
+train_ohab.py            → 辅助任务（OHAB 评级）
+train_arrive.py          → 辅助任务（到店预测）
 ```
 
-仓库中实际存在 3 个训练脚本；另有 `train_arrive_oot` / `train_ohab_oot` 两个兼容任务名，通过 `scripts/run.py` 转发到统一训练入口。
-
-### 数据格式适配
+## 数据格式适配
 
 项目支持两种数据格式，通过 `auto_adapt=True` 自动适配：
 
@@ -50,7 +127,7 @@ train_test_drive.py  → 辅助任务（试驾预测）
 
 关键代码：`src/data/adapter.py` 定义了 46 列的映射关系。修改时注意 `线索创建时间` 在索引 4，`线索评级结果`（OHAB）在索引 26。
 
-### AutoML 预处理
+## AutoML 预处理
 
 **不要手动进行以下处理**，模型框架会自动处理：
 - 类别编码（自动类别特征处理）
@@ -65,13 +142,13 @@ train_test_drive.py  → 辅助任务（试驾预测）
 - `FeatureEngineer` 只接受 `time_columns` 和 `numeric_columns` 参数
 - 验证脚本应自动匹配训练时的特征工程配置，避免硬编码参数导致不兼容
 
-### 配置优先级
+## 配置优先级
 
 ```
 命令行参数 > .env 环境变量 > config/config.py 默认值
 ```
 
-### OOT 训练最佳实践
+## OOT 训练最佳实践
 
 **避免数据泄露**：
 - 使用 `tuning_data` 参数传入验证集，而非合并到 `train_data`
@@ -83,10 +160,15 @@ train_test_drive.py  → 辅助任务（试驾预测）
 
 | 文件 | 用途 |
 |------|------|
+| `scripts/run.py` | 一级入口：统一调度器 |
+| `scripts/train_model.py` | 二级入口：训练路由器 |
+| `scripts/validate_model.py` | 二级入口：验证路由器 |
+| `scripts/merge_data.py` | 数据合并：线索宽表 + DMP 行为 |
 | `config/config.py` | 配置管理：ID 列、泄漏字段、特征定义 |
 | `src/data/adapter.py` | 数据格式适配：列映射、目标变量计算 |
 | `src/data/loader.py` | 数据加载：特征工程、OOT 时间切分 |
 | `src/models/predictor.py` | 模型封装：训练、清理 |
+| `src/inference/hab_deriver.py` | HAB 推导逻辑（三模型模式） |
 
 ## 数据质量警告
 

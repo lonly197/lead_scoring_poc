@@ -1035,7 +1035,8 @@ def main():
                 "excluded_columns": excluded_columns,
             }
             if comparator_only == "baseline_gbdt":
-                train_kwargs["hyperparameters"] = {"GBM": {}}
+                # 仅训练基础 GBM 模型以加速对比分析
+                train_kwargs["hyperparameters"] = runtime_config.get("baseline_hyperparameters", {"GBM": {}})
             if len(valid_df) > 0:
                 train_kwargs["tuning_data"] = valid_df
 

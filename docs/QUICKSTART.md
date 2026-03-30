@@ -24,13 +24,13 @@ cp .env.example .env
 
 ```bash
 # 1. 训练 HAB 模型（后台运行）
-uv run python scripts/run.py train_ohab --daemon
+uv run python scripts/run.py train ohab --daemon
 
 # 2. 查看训练日志
-uv run python scripts/monitor.py log train_ohab -f
+uv run python scripts/run.py monitor log train_ohab -f
 
 # 3. 验证模型
-uv run python scripts/validate_model.py --model-type ohab
+uv run python scripts/run.py validate --model-path outputs/models/ohab_model
 
 # 4. 生成报告
 uv run python scripts/generate_business_report.py
@@ -47,40 +47,132 @@ uv run python scripts/generate_business_report.py
 
 ---
 
-## 常用命令
+## 统一入口命令
+
+### 数据加载模式
+
+| 模式 | 参数 | 说明 |
+|------|------|------|
+| 动态拆分 | `--data-path` | 默认模式，自动划分训练/测试集 |
+| 提前拆分 | `--train-path` + `--test-path` | 优先级更高，适用于已切分的数据 |
+
+支持 `.csv`、`.tsv`、`.parquet` 格式。
+
+### 训练模型
+
+```bash
+# 动态拆分模式（默认）
+uv run python scripts/run.py train test_drive --daemon
+
+# 提前拆分模式
+uv run python scripts/run.py train test_drive --daemon \
+    --train-path ./data/train.parquet \
+    --test-path ./data/test.parquet
+
+# 仅训练 CatBoost（推荐）
+uv run python scripts/run.py train test_drive --daemon \
+    --included-model-types CAT
+
+# 三模型集成训练
+uv run python scripts/run.py train ensemble --daemon
+
+# 三模型并行训练（32GB+ 服务器）
+uv run python scripts/run.py train ensemble --daemon --parallel --max-workers 3
+
+# HAB 评级模型
+uv run python scripts/run.py train ohab --daemon
+```
+
+### 验证模型
+
+```bash
+# 动态拆分模式
+uv run python scripts/run.py validate \
+    --model-path outputs/models/test_drive_model
+
+# 提前拆分模式
+uv run python scripts/run.py validate \
+    --model-path outputs/models/test_drive_model \
+    --test-path ./data/test.parquet
+```
 
 ### 监控任务
 
 ```bash
-uv run python scripts/monitor.py status      # 查看运行状态
-uv run python scripts/monitor.py log train_ohab -f   # 跟踪日志
-uv run python scripts/monitor.py stop --all   # 停止所有任务
+# 查看运行状态
+uv run python scripts/run.py monitor status
+
+# 列出所有任务（包括已完成）
+uv run python scripts/run.py monitor list
+
+# 查看任务日志
+uv run python scripts/run.py monitor log train_test_drive
+
+# 持续跟踪日志
+uv run python scripts/run.py monitor log train_test_drive -f
+
+# 查看任务详情
+uv run python scripts/run.py monitor detail train_test_drive
+
+# 停止任务
+uv run python scripts/run.py monitor stop train_test_drive
+
+# 停止所有任务
+uv run python scripts/run.py monitor stop --all
 ```
 
-### 数据诊断
+---
+
+## 二级入口命令
+
+也可以直接调用二级入口脚本：
+
+### 训练路由器
 
 ```bash
-uv run python scripts/diagnose_data.py ./data/202602~03.tsv
+uv run python scripts/train_model.py test_drive --daemon
+uv run python scripts/train_model.py ensemble --daemon
 ```
 
-### 生成 Top-K 名单
+### 验证路由器
 
 ```bash
-uv run python scripts/generate_topk.py \
-    --model-path ./outputs/models/ohab_model \
-    --target-class H \
-    --k 100 500 1000
+uv run python scripts/validate_model.py --model-path outputs/models/test_drive_model
 ```
 
-### 验证其他模型
+### 监控脚本
 
 ```bash
-# 到店模型
-uv run python scripts/validate_model.py --model-type arrive
-
-# 试驾模型
-uv run python scripts/validate_model.py --model-type test_drive
+uv run python scripts/monitor.py status
+uv run python scripts/monitor.py log train_test_drive -f
+uv run python scripts/monitor.py stop --all
 ```
+
+---
+
+## 数据合并
+
+合并线索宽表和 DMP 行为数据：
+
+```bash
+# 输出 parquet 格式（推荐）
+uv run python scripts/merge_data.py \
+    --excel ./data/线索宽表.xlsx \
+    --dmp ./data/DMP行为数据.csv \
+    --output ./data/线索宽表_完整.parquet
+
+# 输出 CSV 格式
+uv run python scripts/merge_data.py \
+    --excel ./data/线索宽表.xlsx \
+    --dmp ./data/DMP行为数据.csv \
+    --output ./data/线索宽表_完整.csv \
+    --format csv
+```
+
+**功能**：
+- 合并 Excel 多个数据 Sheet
+- 按手机号关联 DMP 行为数据
+- 聚合行为特征（行为次数、最近时间、试驾/下单相关次数等）
 
 ---
 
@@ -90,24 +182,30 @@ uv run python scripts/validate_model.py --model-type test_drive
 
 | 参数 | 说明 | 默认值 |
 |------|------|--------|
-| `--data-path` | 数据文件路径 | `.env` 中的 `DATA_PATH` |
-| `--training-profile` | 训练档位 | `server_16g_compare` |
-| `--time-limit` | 训练时间限制（秒） | 5400 |
+| `--data-path` | 数据文件路径（动态拆分模式） | `.env` 中的 `DATA_PATH` |
+| `--train-path` | 训练集路径（提前拆分模式） | `.env` 中的 `TRAIN_DATA_PATH` |
+| `--test-path` | 测试集路径（提前拆分模式） | `.env` 中的 `TEST_DATA_PATH` |
 | `--preset` | 模型预设 | `good_quality` |
-| `--memory-limit-gb` | 内存软限制 | 自动探测 |
-| `--generate-plots` | 生成 PNG 图表 | false |
+| `--time-limit` | 训练时间限制（秒） | 5400 |
+| `--included-model-types` | 指定训练的模型类型 | 空（使用预设所有模型） |
+| `--parallel` | 并行训练三模型（仅 ensemble） | false |
+| `--max-workers` | 并行进程数（仅 ensemble） | 3 |
 
 **示例**：
 
 ```bash
-# 指定数据路径
-uv run python scripts/run.py train_ohab --daemon --data-path ./data/custom.tsv
+# 提前拆分模式
+uv run python scripts/run.py train test_drive --daemon \
+    --train-path ./data/train.parquet \
+    --test-path ./data/test.parquet
 
-# 调整训练时间
-uv run python scripts/run.py train_ohab --daemon --time-limit 3600
+# 仅训练 CatBoost
+uv run python scripts/run.py train test_drive --daemon \
+    --included-model-types CAT
 
-# 生成汇报配图
-uv run python scripts/run.py train_ohab --daemon --generate-plots
+# 三模型并行训练（32GB+ 服务器）
+uv run python scripts/run.py train ensemble --daemon \
+    --parallel --max-workers 3
 ```
 
 ---

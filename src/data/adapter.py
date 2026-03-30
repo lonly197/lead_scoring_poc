@@ -237,10 +237,12 @@ def calculate_target_labels(df: pd.DataFrame) -> pd.DataFrame:
 
         df["试驾标签_7天"] = ((drive_days >= 0) & (drive_days <= 7)).astype(int)
         df["试驾标签_14天"] = ((drive_days >= 0) & (drive_days <= 14)).astype(int)
+        df["试驾标签_21天"] = ((drive_days >= 0) & (drive_days <= 21)).astype(int)
         df["试驾标签_30天"] = ((drive_days >= 0) & (drive_days <= 30)).astype(int)
     else:
         df["试驾标签_7天"] = 0
         df["试驾标签_14天"] = 0
+        df["试驾标签_21天"] = 0
         df["试驾标签_30天"] = 0
 
     # 保留历史兼容目标列，默认主口径仍应使用“线索评级结果”

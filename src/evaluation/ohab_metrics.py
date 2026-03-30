@@ -144,7 +144,8 @@ def apply_hab_decision_policy(
         elif "A" in proba_df.columns:
             predictions.append("A")
         else:
-            predictions.append(row.astype(float).idxmax())
+            # 兜底逻辑：若无 A 则取概率最大的类
+            predictions.append(row.idxmax())
 
     return pd.Series(predictions, index=proba_df.index)
 

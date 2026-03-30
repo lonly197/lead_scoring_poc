@@ -5,6 +5,10 @@
 1. 读取训练与验证阶段输出的结构化结果。
 2. 生成可直接用于 POC 汇报的 Markdown 报告。
 
+支持模式：
+- single: 单模型模式（HAB 直接预测）
+- ensemble: 三模型模式（7/14/21 天试驾概率 → HAB 推导）
+
 本脚本不负责：
 - 推断业务规则
 - 计算模型指标
@@ -73,6 +77,13 @@ def _select_comparison_row(rows: list[dict], model_name: str | None, fallback_ro
 def parse_args():
     parser = argparse.ArgumentParser(description="生成客户版业务解释报告")
     parser.add_argument(
+        "--mode",
+        type=str,
+        default="single",
+        choices=["single", "ensemble"],
+        help="报告模式: single(单模型) / ensemble(三模型)",
+    )
+    parser.add_argument(
         "--model-dir",
         type=str,
         default="outputs/models/ohab_model",
@@ -106,14 +117,12 @@ def _load_dataframe(path: Path) -> pd.DataFrame:
     return pd.read_csv(path)
 
 
-def generate_report() -> None:
-    args = parse_args()
-    setup_logging(level=logging.INFO)
-
-    model_dir = Path(args.model_dir)
-    validation_dir = Path(args.validation_dir)
-    output_path = Path(args.output_path)
-
+def generate_single_report(
+    model_dir: Path,
+    validation_dir: Path,
+    output_path: Path,
+) -> None:
+    """生成单模型报告（原有逻辑）"""
     evaluation_summary = _load_json(validation_dir / "evaluation_summary.json", {})
     bucket_summary = _load_json(validation_dir / "hab_bucket_summary.json", [])
     monotonicity_check = _load_json(validation_dir / "monotonicity_check.json", {})
@@ -224,7 +233,7 @@ def generate_report() -> None:
             "该模型是 AutoML 在内部概率损失口径下的最优结果，用于技术参考。"
         )
     report_lines.append(
-        "- 客户版主模型采用业务推荐模型，因为它更适合当前“高意向优先触达 + 分层运营”的落地目标。"
+        "- 客户版主模型采用业务推荐模型，因为它更适合当前"高意向优先触达 + 分层运营"的落地目标。"
     )
     if balanced_accuracy is not None or macro_f1 is not None:
         report_lines.append(
@@ -267,5 +276,162 @@ def generate_report() -> None:
     logger.info(f"业务报告已生成: {output_path}")
 
 
+def generate_ensemble_report(
+    model_dir: Path,
+    validation_dir: Path,
+    output_path: Path,
+) -> None:
+    """
+    生成三模型集成报告
+
+    Args:
+        model_dir: 模型目录
+        validation_dir: 验证结果目录
+        output_path: 输出路径
+    """
+    # 加载验证结果
+    validation_results = _load_json(validation_dir / "validation_results.json", {})
+    ensemble_metadata = _load_json(model_dir / "ensemble_metadata.json", {})
+
+    model_results = validation_results.get("model_results", [])
+    hab_validation = validation_results.get("hab_validation", {})
+
+    report_lines = [
+        "# 三模型试驾预测 HAB 评级 POC 报告",
+        "",
+        f"> 生成时间: {get_timestamp()}",
+        "> 报告口径: 7/14/21 天试驾概率预测 → HAB 业务规则推导",
+        "",
+        "## 1. 技术方案概述",
+        "",
+        "本方案采用「小模型预测概率 + 业务规则推导」的两阶段模式：",
+        "",
+        "1. **概率预测**：训练 3 个独立的试驾预测模型（7天/14天/21天）",
+        "2. **评级推导**：基于业务规则从概率映射 H/A/B 评级",
+        "",
+        "### 业务规则映射",
+        "",
+        "| 评级 | 时间窗口 | 下次联络间隔 | 判定条件 |",
+        "|------|----------|-------------|----------|",
+        "| H 级 | 7 天内试驾 | < 3 天 | P(7天试驾) >= 阈值 |",
+        "| A 级 | 14 天内试驾 | < 7 天 | P(14天试驾) >= 阈值 且 P(7天) < 阈值 |",
+        "| B 级 | 21 天内试驾 | < 14 天 | P(21天试驾) >= 阈值 且 P(14天) < 阈值 |",
+        "| N 级 | 无试驾计划 | - | 所有概率 < 阈值 |",
+        "",
+    ]
+
+    # 各模型性能
+    report_lines.extend([
+        "## 2. 各模型性能",
+        "",
+        "| 模型 | ROC-AUC | Top-100 命中率 | Top-100 Lift |",
+        "|------|---------|----------------|--------------|",
+    ])
+
+    for r in model_results:
+        roc_auc = f"{_safe_float(r.get('roc_auc')):.4f}"
+        top100 = r.get("topk_metrics", {}).get("top_100", {})
+        hit_rate = _format_pct(top100.get("hit_rate", 0))
+        lift = _format_lift(top100.get("lift", 0))
+        report_lines.append(f"| {r.get('target', '')} | {roc_auc} | {hit_rate} | {lift} |")
+
+    # HAB 分布
+    report_lines.extend([
+        "",
+        "## 3. HAB 评级分布",
+        "",
+    ])
+
+    distribution = hab_validation.get("distribution", {})
+    total = sum(distribution.values())
+
+    report_lines.extend([
+        "| 评级 | 数量 | 占比 |",
+        "|------|------|------|",
+    ])
+
+    for rating in ["H", "A", "B", "N"]:
+        count = distribution.get(rating, 0)
+        pct = f"{count / total:.1%}" if total > 0 else "0%"
+        report_lines.append(f"| {rating} 级 | {count} | {pct} |")
+
+    # 实际试驾率
+    report_lines.extend([
+        "",
+        "## 4. 各评级实际试驾率验证",
+        "",
+        "| 评级 | 样本数 | 7天试驾率 | 14天试驾率 | 21天试驾率 |",
+        "|------|--------|-----------|------------|------------|",
+    ])
+
+    actual_rates = hab_validation.get("actual_drive_rates", {})
+    for rating in ["H", "A", "B", "N"]:
+        rates = actual_rates.get(rating, {})
+        count = rates.get("count", 0)
+        rate_7d = _format_pct(rates.get("rate_7d", 0))
+        rate_14d = _format_pct(rates.get("rate_14d", 0))
+        rate_21d = _format_pct(rates.get("rate_21d", 0))
+        report_lines.append(f"| {rating} 级 | {count} | {rate_7d} | {rate_14d} | {rate_21d} |")
+
+    # 分层效果验证
+    report_lines.extend([
+        "",
+        "## 5. 分层效果验证",
+        "",
+    ])
+
+    is_hierarchical = hab_validation.get("is_hierarchical", False)
+    issues = hab_validation.get("issues", [])
+
+    if is_hierarchical:
+        report_lines.append("✅ **通过**：H 级试驾率 > A 级 > B 级，分层效果符合业务预期。")
+    else:
+        report_lines.append("❌ **未通过**：分层效果存在问题。")
+        for issue in issues:
+            report_lines.append(f"- {issue}")
+
+    # 业务建议
+    report_lines.extend([
+        "",
+        "## 6. 业务建议",
+        "",
+    ])
+
+    threshold = hab_validation.get("threshold", 0.5)
+    report_lines.extend([
+        f"- 当前判定阈值为 {threshold:.0%}，可根据业务需求调整",
+        "- H 级客户：优先跟进，建议 3 天内联络",
+        "- A 级客户：正常跟进，建议 7 天内联络",
+        "- B 级客户：低频培育，建议 14 天内联络",
+        "- N 级客户：暂无试驾意向，可进入长线培育池",
+        "",
+        "## 7. 技术说明",
+        "",
+        "- 模型类型：AutoGluon TabularPredictor（二分类）",
+        f"- 训练预设：{ensemble_metadata.get('preset', 'N/A')}",
+        f"- 单模型时间限制：{ensemble_metadata.get('time_limit_per_model', 'N/A')} 秒",
+        "- 样本权重：自动平衡类别权重（sample_weight='balance_weight'）",
+    ])
+
+    # 写入文件
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text("\n".join(report_lines) + "\n", encoding="utf-8")
+    logger.info(f"三模型报告已生成: {output_path}")
+
+
+def main() -> None:
+    args = parse_args()
+    setup_logging(level=logging.INFO)
+
+    model_dir = Path(args.model_dir)
+    validation_dir = Path(args.validation_dir)
+    output_path = Path(args.output_path)
+
+    if args.mode == "ensemble":
+        generate_ensemble_report(model_dir, validation_dir, output_path)
+    else:
+        generate_single_report(model_dir, validation_dir, output_path)
+
+
 if __name__ == "__main__":
-    generate_report()
+    main()

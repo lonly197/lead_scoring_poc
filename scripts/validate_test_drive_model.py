@@ -86,7 +86,13 @@ def parse_args():
     parser = argparse.ArgumentParser(description="验证试驾预测模型")
     parser.add_argument("--log-file", type=str, default=None, help="日志文件路径")
     parser.add_argument("--model-path", type=str, default="outputs/models/test_drive_model", help="模型路径")
-    parser.add_argument("--data-path", type=str, default=None, help="测试数据路径")
+    parser.add_argument("--data-path", type=str, default=None, help="测试数据路径（动态拆分模式）")
+    parser.add_argument(
+        "--test-path",
+        type=str,
+        default=None,
+        help="测试集文件路径（提前拆分模式，优先级高于 --data-path）",
+    )
     parser.add_argument("--target", type=str, default="试驾标签_14天", help="目标变量名")
     parser.add_argument("--output-dir", type=str, default="outputs/validation/test_drive_validation", help="输出目录")
     parser.add_argument("--report-topk", type=str, default="100,500,1000", help="Top-K 列表")
@@ -102,6 +108,9 @@ def parse_args():
 
 def main():
     args = parse_args()
+
+    # 判断数据加载模式：优先使用提前拆分的测试集
+    test_path = args.test_path or config.data.test_data_path
     data_path = args.data_path or config.data.data_path
 
     if args.log_file:
@@ -125,12 +134,20 @@ def main():
     atexit.register(complete_process_if_running, TASK_NAME, os.getpid())
     evaluation_start_time = get_local_now()
 
+    # 确定实际使用的数据路径
+    actual_data_path = test_path if test_path else data_path
+
     logger.info("=" * 60)
     logger.info("试驾模型验证")
     logger.info("=" * 60)
     logger.info(f"评估开始时间: {format_timestamp(evaluation_start_time)}")
     logger.info(f"模型路径: {args.model_path}")
-    logger.info(f"数据路径: {data_path}")
+    if test_path:
+        logger.info(f"数据加载模式: 提前拆分的测试集")
+        logger.info(f"测试集路径: {test_path}")
+    else:
+        logger.info(f"数据加载模式: 动态拆分")
+        logger.info(f"数据路径: {data_path}")
 
     try:
         model_path = Path(args.model_path)
@@ -141,6 +158,8 @@ def main():
 
         metadata = load_feature_metadata(model_path)
         validate_test_drive_model_artifacts(metadata, model_path)
+        interaction_context = metadata.get("interaction_context", {})
+        label_policy = metadata.get("label_policy", {})
 
         output_dir = Path(args.output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -148,17 +167,19 @@ def main():
         predictor = LeadScoringPredictor.load(str(model_path))
         target = predictor.label if predictor.label else args.target
 
-        loader = DataLoader(data_path, auto_adapt=True)
+        loader = DataLoader(actual_data_path, auto_adapt=True)
         df = loader.load()
+
+        if label_policy:
+            from src.data.label_policy import apply_ohab_label_policy
+            df = apply_ohab_label_policy(df, target, label_policy)
 
         feature_engineer = FeatureEngineer(
             time_columns=config.feature.time_columns,
             numeric_columns=config.feature.numeric_features,
+            interaction_context=interaction_context,
         )
-        if hasattr(feature_engineer, "transform"):
-            df_processed, _ = feature_engineer.transform(df)
-        else:
-            df_processed, _ = feature_engineer.process(df)
+        df_processed, _ = feature_engineer.transform(df, interaction_context=interaction_context)
 
         excluded_columns = get_excluded_columns(target)
         cols_to_drop = [col for col in excluded_columns if col in df_processed.columns and col != target]
