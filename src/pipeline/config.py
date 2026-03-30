@@ -105,6 +105,7 @@ class PipelineConfig:
     # ====================
     default_output_dir: Path = field(default_factory=lambda: Path("./data"))
     reports_dir: Path = field(default_factory=lambda: Path("./reports"))
+    cache_dir: Path = field(default_factory=lambda: Path("./data/cache"))
     log_level: str = "INFO"
 
     def get(self, step: str, key: str, default=None):

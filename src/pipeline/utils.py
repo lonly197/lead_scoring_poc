@@ -279,3 +279,124 @@ def check_file_exists(path: Union[str, Path], overwrite: bool = False) -> bool:
             print("   使用 --overwrite 参数覆盖")
             return False
     return True
+
+
+def get_or_create_parquet_cache(
+    source_path: Union[str, Path],
+    cache_dir: Optional[Union[str, Path]] = None,
+    engine: str = "openpyxl",
+    force_refresh: bool = False,
+    sheet_name: Optional[str] = None,
+) -> Path:
+    """
+    获取或创建 Excel 的 Parquet 缓存
+
+    对于大 Excel 文件，首次运行时转换为 Parquet 格式缓存。
+    后续运行直接读取 Parquet 缓存，大幅降低内存占用和读取时间。
+
+    Args:
+        source_path: Excel 文件路径
+        cache_dir: 缓存目录（默认 ./data/cache）
+        engine: Excel 读取引擎（openpyxl/fastexcel/calamine）
+        force_refresh: 是否强制刷新缓存
+        sheet_name: 指定读取的 Sheet 名称（用于多 Sheet 缓存）
+
+    Returns:
+        Parquet 缓存文件路径
+
+    Example:
+        >>> cache_path = get_or_create_parquet_cache("./data/large.xlsx")
+        >>> df = pl.read_parquet(cache_path)  # 内存友好
+    """
+    import hashlib
+
+    source_path = Path(source_path).resolve()
+
+    if cache_dir is None:
+        cache_dir = Path("./data/cache")
+    else:
+        cache_dir = Path(cache_dir)
+    cache_dir = cache_dir.resolve()
+
+    # 计算缓存 key（基于文件路径 + 修改时间 + 大小 + Sheet名）
+    file_stat = source_path.stat()
+    key_parts = f"{source_path}:{file_stat.st_mtime}:{file_stat.st_size}"
+    if sheet_name:
+        key_parts += f":{sheet_name}"
+    cache_key = hashlib.md5(key_parts.encode()).hexdigest()[:12]
+
+    # 缓存文件名
+    stem = source_path.stem
+    if sheet_name:
+        cache_name = f"{stem}_{sheet_name}_{cache_key}.parquet"
+    else:
+        cache_name = f"{stem}_{cache_key}.parquet"
+    cache_path = cache_dir / cache_name
+
+    # 检查缓存是否有效
+    if cache_path.exists() and not force_refresh:
+        cache_stat = cache_path.stat()
+        # 缓存必须比源文件新
+        if cache_stat.st_mtime > file_stat.st_mtime:
+            print(f"  使用缓存: {cache_path} ({format_size(cache_path)})")
+            return cache_path
+
+    # 转换 Excel → Parquet
+    print(f"  转换 Excel → Parquet 缓存...")
+    cache_dir.mkdir(parents=True, exist_ok=True)
+
+    import polars as pl
+
+    # 读取 Excel
+    if sheet_name:
+        df = pl.read_excel(str(source_path), sheet_name=sheet_name, engine=engine)
+    else:
+        df = pl.read_excel(str(source_path), engine=engine)
+
+    # 写入 Parquet（使用 zstd 压缩，压缩率和速度平衡）
+    df.write_parquet(cache_path, compression="zstd")
+
+    # 释放内存
+    del df
+
+    print(f"  缓存已保存: {cache_path} ({format_size(cache_path)})")
+
+    return cache_path
+
+
+def clear_cache(
+    cache_dir: Union[str, Path] = None,
+    older_than_days: Optional[int] = None,
+) -> int:
+    """
+    清理缓存目录
+
+    Args:
+        cache_dir: 缓存目录（默认 ./data/cache）
+        older_than_days: 清理多少天前的缓存（None 表示全部清理）
+
+    Returns:
+        删除的文件数量
+    """
+    import time
+
+    if cache_dir is None:
+        cache_dir = Path("./data/cache")
+    else:
+        cache_dir = Path(cache_dir)
+
+    if not cache_dir.exists():
+        return 0
+
+    deleted = 0
+    cutoff_time = time.time() - (older_than_days * 86400) if older_than_days else 0
+
+    for cache_file in cache_dir.glob("*.parquet"):
+        if older_than_days is None or cache_file.stat().st_mtime < cutoff_time:
+            cache_file.unlink()
+            deleted += 1
+
+    if deleted > 0:
+        print(f"  已清理 {deleted} 个缓存文件")
+
+    return deleted

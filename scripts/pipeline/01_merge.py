@@ -26,8 +26,8 @@ from typing import Optional
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
-from src.pipeline.utils import load_data, save_data, print_step, format_size
-from src.pipeline.config import DMP_COLUMNS
+from src.pipeline.utils import load_data, save_data, print_step, format_size, get_or_create_parquet_cache
+from src.pipeline.config import DMP_COLUMNS, default_config
 
 
 def find_phone_column(columns: list, patterns: list = None) -> Optional[str]:
@@ -87,6 +87,8 @@ def merge_data(
     output_path: Path,
     output_format: str = "parquet",
     sheet_limit: int = 2,
+    use_cache: bool = True,
+    force_refresh_cache: bool = False,
 ) -> Path:
     """
     合并 Excel 和 DMP 数据
@@ -97,6 +99,8 @@ def merge_data(
         output_path: 输出文件路径
         output_format: 输出格式 (parquet/csv)
         sheet_limit: 最多读取的 Sheet 数量
+        use_cache: 是否使用 Parquet 缓存
+        force_refresh_cache: 是否强制刷新缓存
 
     Returns:
         输出文件路径
@@ -107,57 +111,107 @@ def merge_data(
     print("数据合并脚本")
     print("=" * 60)
 
-    # 1. 读取 Excel
-    print_step("读取 Excel", "running", str(excel_path))
+    # 1. 读取 Excel（支持缓存）
+    if use_cache:
+        print_step("准备 Excel 缓存", "running", str(excel_path))
 
-    from openpyxl import load_workbook
-    wb = load_workbook(str(excel_path), read_only=True)
-    all_sheets = wb.sheetnames
-    wb.close()
+        # 获取 Sheet 列表
+        from openpyxl import load_workbook
+        wb = load_workbook(str(excel_path), read_only=True)
+        all_sheets = wb.sheetnames
+        wb.close()
 
-    print(f"  Sheet 列表: {all_sheets}")
+        print(f"  Sheet 列表: {all_sheets}")
 
-    # 读取数据 sheet（排除 Query）
-    data_sheets = [s for s in all_sheets if 'query' not in s.lower()][:sheet_limit]
-    print(f"  待合并 Sheet: {data_sheets}")
+        # 读取数据 sheet（排除 Query）
+        data_sheets = [s for s in all_sheets if 'query' not in s.lower()][:sheet_limit]
+        print(f"  待合并 Sheet: {data_sheets}")
 
-    dfs = []
-    for sheet in data_sheets:
-        print(f"    读取 {sheet}...")
-        # 优先使用 openpyxl（更稳定），fastexcel 作为备选
-        df = None
-        last_error = None
-        for engine in ["openpyxl", "fastexcel"]:
-            try:
-                df = pl.read_excel(str(excel_path), sheet_name=sheet, engine=engine)
-                print(f"      使用 {engine} 引擎")
-                break
-            except FileNotFoundError:
-                # 文件不存在，直接抛出，不需要尝试其他引擎
-                raise
-            except PermissionError:
-                # 权限问题，直接抛出
-                raise
-            except Exception as e:
-                # 格式错误、Sheet 不存在等，尝试其他引擎
-                last_error = e
-                continue
-        if df is None:
-            raise RuntimeError(f"无法读取 Sheet: {sheet}, 最后错误: {last_error}")
-        print(f"      {len(df):,} 行, {len(df.columns)} 列")
-        dfs.append(df)
+        # 使用缓存读取每个 Sheet
+        cache_dir = default_config.cache_dir
+        dfs = []
 
-    # 合并
-    if len(dfs) > 1:
-        clue_df = pl.concat(dfs)
+        for sheet in data_sheets:
+            print(f"    处理 {sheet}...")
+
+            # 获取或创建该 Sheet 的 Parquet 缓存
+            cache_path = get_or_create_parquet_cache(
+                source_path=excel_path,
+                cache_dir=cache_dir,
+                engine="openpyxl",
+                force_refresh=force_refresh_cache,
+                sheet_name=sheet,
+            )
+
+            # 从 Parquet 缓存读取（内存高效）
+            df = pl.read_parquet(str(cache_path))
+            print(f"      {len(df):,} 行, {len(df.columns)} 列")
+            dfs.append(df)
+
+        # 合并
+        if len(dfs) > 1:
+            clue_df = pl.concat(dfs)
+        else:
+            clue_df = dfs[0]
+
+        # 释放中间数据
+        dfs.clear()
+        del dfs
+
+        print_step("准备 Excel 缓存", "success", f"{len(clue_df):,} 行, {len(clue_df.columns)} 列")
+
     else:
-        clue_df = dfs[0]
+        # 不使用缓存，直接读取 Excel（原逻辑）
+        print_step("读取 Excel", "running", str(excel_path))
 
-    # 释放中间数据
-    dfs.clear()
-    del dfs
+        from openpyxl import load_workbook
+        wb = load_workbook(str(excel_path), read_only=True)
+        all_sheets = wb.sheetnames
+        wb.close()
 
-    print_step("读取 Excel", "success", f"{len(clue_df):,} 行, {len(clue_df.columns)} 列")
+        print(f"  Sheet 列表: {all_sheets}")
+
+        # 读取数据 sheet（排除 Query）
+        data_sheets = [s for s in all_sheets if 'query' not in s.lower()][:sheet_limit]
+        print(f"  待合并 Sheet: {data_sheets}")
+
+        dfs = []
+        for sheet in data_sheets:
+            print(f"    读取 {sheet}...")
+            # 优先使用 openpyxl（更稳定），fastexcel 作为备选
+            df = None
+            last_error = None
+            for engine in ["openpyxl", "fastexcel"]:
+                try:
+                    df = pl.read_excel(str(excel_path), sheet_name=sheet, engine=engine)
+                    print(f"      使用 {engine} 引擎")
+                    break
+                except FileNotFoundError:
+                    # 文件不存在，直接抛出，不需要尝试其他引擎
+                    raise
+                except PermissionError:
+                    # 权限问题，直接抛出
+                    raise
+                except Exception as e:
+                    # 格式错误、Sheet 不存在等，尝试其他引擎
+                    last_error = e
+                    continue
+            if df is None:
+                raise RuntimeError(f"无法读取 Sheet: {sheet}, 最后错误: {last_error}")
+            print(f"      {len(df):,} 行, {len(df.columns)} 列")
+            dfs.append(df)
+
+        # 合并
+        if len(dfs) > 1:
+            clue_df = pl.concat(dfs)
+        else:
+            clue_df = dfs[0]
+
+        # 释放中间数据
+        dfs.clear()
+        del dfs
+
+        print_step("读取 Excel", "success", f"{len(clue_df):,} 行, {len(clue_df.columns)} 列")
 
     # 2. 读取 DMP 数据
     print_step("读取 DMP", "running", str(dmp_path))
@@ -238,6 +292,20 @@ def main() -> int:
         --dmp ./data/DMP行为数据.csv \\
         --output ./data/merged.csv \\
         --format csv
+
+    # 强制刷新 Excel 缓存
+    uv run python scripts/pipeline/01_merge.py \\
+        --excel ./data/线索宽表.xlsx \\
+        --dmp ./data/DMP行为数据.csv \\
+        --output ./data/merged.parquet \\
+        --force-refresh-cache
+
+    # 禁用缓存，直接读取 Excel
+    uv run python scripts/pipeline/01_merge.py \\
+        --excel ./data/线索宽表.xlsx \\
+        --dmp ./data/DMP行为数据.csv \\
+        --output ./data/merged.parquet \\
+        --no-cache
         """,
     )
 
@@ -268,6 +336,16 @@ def main() -> int:
         default=2,
         help="最多读取的 Sheet 数量（默认: 2）"
     )
+    parser.add_argument(
+        "--no-cache",
+        action="store_true",
+        help="禁用 Parquet 缓存，直接读取 Excel"
+    )
+    parser.add_argument(
+        "--force-refresh-cache",
+        action="store_true",
+        help="强制刷新 Excel 的 Parquet 缓存"
+    )
 
     args = parser.parse_args()
 
@@ -290,6 +368,8 @@ def main() -> int:
             output_path=output_path,
             output_format=args.format,
             sheet_limit=args.sheet_limit,
+            use_cache=not args.no_cache,
+            force_refresh_cache=args.force_refresh_cache,
         )
         return 0
 
