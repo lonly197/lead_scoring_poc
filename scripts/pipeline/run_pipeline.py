@@ -309,6 +309,13 @@ def main() -> int:
         --output ./data/final \\
         --skip desensitize
 
+    # 仅运行合并步骤
+    uv run python scripts/pipeline/run_pipeline.py \\
+        --step merge \\
+        --excel ./data/线索宽表.xlsx \\
+        --dmp ./data/DMP行为数据.csv \\
+        --output ./data/merged.parquet
+
     # 仅运行清洗步骤
     uv run python scripts/pipeline/run_pipeline.py \\
         --step clean \\
@@ -368,22 +375,25 @@ def main() -> int:
     try:
         if args.step:
             # 单步执行
-            if not args.input:
-                print("❌ 单步执行需要 --input 参数")
-                return 1
-
-            step_args = {
-                "input": args.input,
-                "output": args.output,
-            }
-
-            # 对于 merge 步骤，需要额外参数
+            # 对于 merge 步骤，需要特殊处理
             if args.step == "merge":
                 if not args.excel or not args.dmp:
                     print("❌ merge 步骤需要 --excel 和 --dmp 参数")
                     return 1
-                step_args["excel"] = args.excel
-                step_args["dmp"] = args.dmp
+                step_args = {
+                    "excel": args.excel,
+                    "dmp": args.dmp,
+                    "output": args.output,
+                }
+            else:
+                # 其他步骤需要 --input
+                if not args.input:
+                    print(f"❌ {args.step} 步骤需要 --input 参数")
+                    return 1
+                step_args = {
+                    "input": args.input,
+                    "output": args.output,
+                }
 
             result = run_single_step(args.step, step_args, extra)
 
