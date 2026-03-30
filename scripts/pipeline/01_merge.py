@@ -132,7 +132,14 @@ def merge_data(
                 df = pl.read_excel(str(excel_path), sheet_name=sheet, engine=engine)
                 print(f"      使用 {engine} 引擎")
                 break
+            except FileNotFoundError:
+                # 文件不存在，直接抛出，不需要尝试其他引擎
+                raise
+            except PermissionError:
+                # 权限问题，直接抛出
+                raise
             except Exception as e:
+                # 格式错误、Sheet 不存在等，尝试其他引擎
                 last_error = e
                 continue
         if df is None:
@@ -145,6 +152,10 @@ def merge_data(
         clue_df = pl.concat(dfs)
     else:
         clue_df = dfs[0]
+
+    # 释放中间数据
+    dfs.clear()
+    del dfs
 
     print_step("读取 Excel", "success", f"{len(clue_df):,} 行, {len(clue_df.columns)} 列")
 
@@ -163,6 +174,9 @@ def merge_data(
 
     # 3. 聚合 DMP 特征
     dmp_agg = aggregate_dmp_features(pl, dmp_df)
+
+    # 释放原始 DMP 数据
+    del dmp_df
 
     # 4. 关联数据
     print_step("关联数据", "running")

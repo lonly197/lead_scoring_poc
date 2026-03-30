@@ -411,7 +411,12 @@ def main() -> int:
                 "output": args.output,
             }
 
-            result = run_full_pipeline(pipeline_args, args.skip)
+            # 额外参数传递给 split 步骤（如 --mode oot）
+            extra_args = {}
+            if extra:
+                extra_args["split"] = extra
+
+            result = run_full_pipeline(pipeline_args, args.skip, extra_args)
 
         # 返回状态
         if args.step:

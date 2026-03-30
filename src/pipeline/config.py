@@ -46,15 +46,29 @@ class PipelineConfig:
     # 清洗配置 (clean)
     # ====================
     clean: Dict = field(default_factory=lambda: {
+        # 基础清洗开关
         "drop_high_missing": True,
         "drop_duplicates": True,
-        "high_missing_threshold": 0.5,
+        "high_missing_threshold": 0.5,  # 缺失率 > 50% 的列将被删除
+
+        # 异常值检测配置
+        # IQR 方法: Q1 - k*IQR ~ Q3 + k*IQR 范围外为异常值
+        # k=1.5 为标准值，覆盖 ~99.3% 的正态分布数据
+        # k=3.0 为保守值，覆盖 ~99.9% 的正态分布数据
         "detect_outliers": True,
-        "outlier_method": "iqr",
-        "outlier_threshold": 1.5,  # IQR 乘数
+        "outlier_method": "iqr",  # 可选: "iqr" 或 "zscore"
+        "outlier_threshold": 1.5,  # IQR 乘数 k；zscore 模式下为标准差倍数
+
+        # 偏斜分布检测
+        # 偏度 |skewness| > 1 表示显著偏斜，建议进行 log/box-cox 变换
+        # 正态分布偏度为 0，右偏分布偏度 > 0，左偏分布偏度 < 0
         "handle_skewed": True,
-        "skew_threshold": 1.0,
-        "high_cardinality_threshold": 100,
+        "skew_threshold": 1.0,  # |偏度| > 1 时标记为偏斜分布
+
+        # 高基数检测
+        # 类别列唯一值 > 100 时，one-hot 编码会导致维度爆炸
+        # 建议使用频率编码或目标编码
+        "high_cardinality_threshold": 100,  # 唯一值数量阈值
         "drop_constant_columns": True,
     })
 

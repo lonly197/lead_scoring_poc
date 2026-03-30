@@ -576,6 +576,9 @@ def main() -> int:
 
         print("=" * 60)
 
+        # 释放内存
+        del df, df_cleaned, cleaner
+
         return 0
 
     except Exception as e:

@@ -117,7 +117,10 @@ def profile_data(
 
     print("=" * 60)
 
-    return profiler.profile
+    # 释放内存
+    del profiler
+
+    return profile
 
 
 def main() -> int:

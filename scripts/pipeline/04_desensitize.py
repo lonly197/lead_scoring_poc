@@ -244,6 +244,9 @@ def main() -> int:
         print(f"数据量: {len(df_desensitized):,} 行, {len(df_desensitized.columns)} 列")
         print("=" * 60)
 
+        # 释放内存
+        del df, df_desensitized
+
         return 0
 
     except Exception as e:

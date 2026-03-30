@@ -32,8 +32,12 @@ def load_data(
 
     Returns:
         DataFrame 对象
+
+    Raises:
+        FileNotFoundError: 文件不存在
+        ValueError: 不支持的文件格式
     """
-    path = Path(path)
+    path = Path(path).resolve()  # 规范化路径，防止路径遍历
 
     if not path.exists():
         raise FileNotFoundError(f"文件不存在: {path}")
@@ -88,8 +92,11 @@ def save_data(
 
     Returns:
         保存的文件路径
+
+    Raises:
+        TypeError: 不支持的 DataFrame 类型
     """
-    path = Path(path)
+    path = Path(path).resolve()  # 规范化路径
     path.parent.mkdir(parents=True, exist_ok=True)
 
     suffix = path.suffix.lower()

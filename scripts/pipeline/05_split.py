@@ -92,6 +92,11 @@ def split_random(
     train_df = pl.concat(train_parts)
     test_df = pl.concat(test_parts)
 
+    # 释放中间列表
+    train_parts.clear()
+    test_parts.clear()
+    del train_parts, test_parts
+
     # 最终打乱
     train_df = train_df.sample(fraction=1.0, shuffle=True, seed=random_seed)
     test_df = test_df.sample(fraction=1.0, shuffle=True, seed=random_seed)
@@ -430,6 +435,9 @@ def main() -> int:
         print(f"  文件大小: {format_size(test_path)}")
         print(f"  数据量: {len(test_df):,} 行")
         print("=" * 60)
+
+        # 释放内存
+        del df, train_df, test_df
 
         return 0
 
