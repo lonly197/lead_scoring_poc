@@ -124,18 +124,19 @@ def merge_data(
     dfs = []
     for sheet in data_sheets:
         print(f"    读取 {sheet}...")
-        # 尝试不同引擎：fastexcel > openpyxl
+        # 优先使用 openpyxl（更稳定），fastexcel 作为备选
         df = None
-        for engine in ["fastexcel", "openpyxl"]:
+        last_error = None
+        for engine in ["openpyxl", "fastexcel"]:
             try:
                 df = pl.read_excel(str(excel_path), sheet_name=sheet, engine=engine)
+                print(f"      使用 {engine} 引擎")
                 break
             except Exception as e:
-                if engine == "openpyxl":
-                    print(f"      警告: 所有引擎都失败了: {e}")
+                last_error = e
                 continue
         if df is None:
-            raise RuntimeError(f"无法读取 Sheet: {sheet}")
+            raise RuntimeError(f"无法读取 Sheet: {sheet}, 最后错误: {last_error}")
         print(f"      {len(df):,} 行, {len(df.columns)} 列")
         dfs.append(df)
 
