@@ -211,6 +211,56 @@ train_arrive.py          → 辅助任务（到店预测）
 - `线索创建时间` 在新格式索引 4
 - `线索评级结果`（OHAB）在新格式索引 26
 
+## DuckDB 加速（大文件优化）
+
+对于大文件（>100MB），可使用 DuckDB 加速数据加载和切分：
+
+### DataLoader DuckDB 加载
+
+```python
+from src.data.loader import DataLoader
+
+# 启用 DuckDB 加速加载 Parquet
+loader = DataLoader(
+    "./data/large.parquet",
+    use_duckdb=True,
+    duckdb_memory_limit="4GB",
+)
+df = loader.load()
+```
+
+### DuckDB 版 OOT 切分
+
+```python
+from src.data.loader import split_data_oot_duckdb, split_data_oot_three_way_duckdb
+
+# 二层切分
+train_df, test_df, metadata = split_data_oot_duckdb(
+    "./data/large.parquet",
+    time_column="线索创建时间",
+    cutoff_date="2026-03-01",
+)
+
+# 三层切分
+train_df, valid_df, test_df, metadata = split_data_oot_three_way_duckdb(
+    "./data/large.parquet",
+    time_column="线索创建时间",
+    train_end="2026-03-11",
+    valid_end="2026-03-16",
+)
+```
+
+**性能对比**：
+| 场景 | pandas | DuckDB | 提升 |
+|------|--------|--------|------|
+| 1GB Parquet 加载 | ~15s | ~3s | 5x |
+| OOT 时间切分 | 全量加载 | 按需过滤 | 避免OOM |
+
+**注意事项**：
+- DuckDB 加速仅适用于 Parquet 文件
+- 最终输出仍为 pandas DataFrame（AutoGluon 要求）
+- 小文件（<100MB）收益不明显
+
 ## AutoML 预处理
 
 **不要手动进行以下处理**，模型框架会自动处理：
