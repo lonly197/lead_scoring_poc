@@ -26,6 +26,7 @@ project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
 from src.pipeline.utils import format_size
+from config.column_mapping import normalize_column_names
 
 
 # 必须保留的列（即使缺失率很高）
@@ -34,7 +35,8 @@ PRESERVE_COLUMNS: Set[str] = {
     "到店时间",
     "试驾时间",
     "线索创建时间",
-    "手机号（脱敏）",
+    "手机号_脱敏",  # 规范化后的名称
+    "手机号（脱敏）",  # 兼容旧名称
 }
 
 
@@ -95,6 +97,13 @@ def clean_with_duckdb(
         cols_info = con.execute("DESCRIBE source").fetchall()
         total_cols = len(cols_info)
         col_names = [col[0] for col in cols_info]
+
+        # 字段名规范化（PostgreSQL 不合法字符）
+        rename_map = normalize_column_names(col_names)
+        if rename_map:
+            log(f"  字段名规范化: {len(rename_map)} 个字段需要重命名")
+            for old_name, new_name in rename_map.items():
+                log(f"    \"{old_name}\" → \"{new_name}\"")
 
         # 获取总行数
         total_rows = con.execute("SELECT COUNT(*) FROM source").fetchone()[0]
@@ -165,7 +174,15 @@ def clean_with_duckdb(
         log("\n执行清洗...")
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
-        select_exprs = [f'"{col}"' for col in kept_cols]
+        # 构建字段选择表达式（包含字段名规范化）
+        select_exprs = []
+        for col in kept_cols:
+            new_name = rename_map.get(col, col)
+            if new_name != col:
+                select_exprs.append(f'"{col}" AS "{new_name}"')
+            else:
+                select_exprs.append(f'"{col}"')
+
         select_sql = ", ".join(select_exprs)
 
         con.execute(f"""
