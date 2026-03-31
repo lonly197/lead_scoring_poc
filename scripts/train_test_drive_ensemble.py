@@ -59,6 +59,53 @@ TASK_NAME = "train_test_drive_ensemble"
 # 时间窗口定义（对应 H/A/B 业务规则）
 TIME_WINDOWS = ["7天", "14天", "21天"]
 
+# 目标变量列名（训练时保留，不能删除）
+TARGET_COLUMNS = ["label_7天内试驾", "label_14天内试驾", "label_21天内试驾", "label_OHAB"]
+
+
+def remove_leakage_columns(df, target_label: str = None):
+    """
+    删除泄漏字段（保留目标变量）
+
+    Args:
+        df: 数据框
+        target_label: 当前训练的目标变量（如果指定则保留）
+
+    Returns:
+        清理后的数据框
+    """
+    import pandas as pd
+
+    # 获取所有泄漏字段
+    leakage_cols = config.feature.leakage_columns
+    id_cols = config.feature.id_columns
+
+    # 合并要删除的列
+    cols_to_remove = leakage_cols + id_cols
+
+    # 保留目标变量
+    for target in TARGET_COLUMNS:
+        if target in cols_to_remove:
+            cols_to_remove.remove(target)
+
+    # 如果指定了特定目标变量，确保保留
+    if target_label and target_label in cols_to_remove:
+        cols_to_remove.remove(target_label)
+
+    # 只删除数据中实际存在的列
+    existing_cols = [c for c in cols_to_remove if c in df.columns]
+
+    if existing_cols:
+        logger.info(f"删除泄漏字段: {len(existing_cols)} 个")
+        for c in existing_cols[:10]:  # 只显示前 10 个
+            logger.info(f"  - {c}")
+        if len(existing_cols) > 10:
+            logger.info(f"  ... 及其他 {len(existing_cols) - 10} 个字段")
+
+        df = df.drop(columns=existing_cols)
+
+    return df
+
 
 def parse_args():
     """解析命令行参数"""
@@ -550,10 +597,20 @@ def main():
         if use_split_data:
             # 模式一：提前拆分的数据文件
             logger.info("使用提前拆分的数据文件")
+
+            # 创建输出目录（必须在写入文件之前）
+            output_dir.mkdir(parents=True, exist_ok=True)
+
             train_loader = DataLoader(train_path, auto_adapt=True)
             test_loader = DataLoader(test_path, auto_adapt=True)
             df_train = train_loader.load()
             df_test = test_loader.load()
+
+            # 删除泄漏字段（保留目标变量）
+            logger.info("删除泄漏字段...")
+            df_train = remove_leakage_columns(df_train)
+            df_test = remove_leakage_columns(df_test)
+            logger.info(f"训练集列数: {len(df_train.columns)}, 测试集列数: {len(df_test.columns)}")
 
             # 2. 特征工程（训练集 fit_transform，测试集 transform）
             logger.info("步骤 2/4: 特征工程")
@@ -583,8 +640,16 @@ def main():
 
         else:
             # 模式二：动态拆分
+            # 创建输出目录（必须在写入文件之前）
+            output_dir.mkdir(parents=True, exist_ok=True)
+
             loader = DataLoader(data_path, auto_adapt=True)
             df = loader.load()
+
+            # 删除泄漏字段（保留目标变量）
+            logger.info("删除泄漏字段...")
+            df = remove_leakage_columns(df)
+
             quality = check_data_quality(df)
             logger.info(f"数据: {quality['total_rows']} 行, {quality['total_columns']} 列")
 
