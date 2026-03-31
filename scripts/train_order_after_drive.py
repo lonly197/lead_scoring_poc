@@ -552,14 +552,11 @@ def main():
             logger.info("使用提前拆分的数据文件")
             output_dir.mkdir(parents=True, exist_ok=True)
 
-            train_loader = DataLoader(train_path, auto_adapt=True)
-            test_loader = DataLoader(test_path, auto_adapt=True)
-            df_train = train_loader.load()
-            df_test = test_loader.load()
+            # 直接使用 pandas 加载 Parquet（管道脚本已处理数据，无需 DataLoader 验证）
+            import pandas as pd
+            df_train = pd.read_parquet(train_path)
+            df_test = pd.read_parquet(test_path)
 
-            logger.info("删除泄漏字段...")
-            df_train = remove_leakage_columns(df_train)
-            df_test = remove_leakage_columns(df_test)
             logger.info(f"训练集列数: {len(df_train.columns)}, 测试集列数: {len(df_test.columns)}")
 
             logger.info("步骤 2/4: 特征工程")
