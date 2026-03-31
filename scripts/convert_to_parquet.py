@@ -23,7 +23,7 @@ import logging
 import sys
 import time
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Union
 
 import pandas as pd
 
@@ -85,6 +85,10 @@ def convert_file(
     output_path: Optional[Path] = None,
     compression: str = DEFAULT_COMPRESSION,
     dry_run: bool = False,
+    sep: Optional[str] = None,
+    header: Union[int, str, None] = "infer",
+    columns: Optional[List[str]] = None,
+    chunksize: Optional[int] = None,
 ) -> Tuple[bool, dict]:
     """
     转换单个文件为 Parquet 格式
@@ -94,6 +98,10 @@ def convert_file(
         output_path: 输出文件路径（默认同名 .parquet）
         compression: 压缩算法
         dry_run: 是否仅预览
+        sep: 分隔符（默认自动推断）
+        header: 表头行号，None 表示无表头，"infer" 表示自动推断
+        columns: 列名列表（当 header=None 时使用）
+        chunksize: 分块大小（大文件流式处理）
 
     Returns:
         (是否成功, 统计信息字典)
@@ -136,16 +144,47 @@ def convert_file(
     try:
         # 加载数据
         logger.info(f"加载文件: {input_path}")
-        sep = infer_separator(input_path)
+        # 确定分隔符
+        if sep is None:
+            sep = infer_separator(input_path)
+        logger.info(f"使用分隔符: {'Tab' if sep == '\\t' else sep}")
+
         start_time = time.time()
 
-        df = pd.read_csv(
-            input_path,
-            sep=sep,
-            low_memory=False,
-            encoding="utf-8",
-            on_bad_lines="warn",
-        )
+        # 确定表头设置
+        header_arg = header
+        names_arg = columns
+
+        if chunksize:
+            # 流式处理大文件
+            logger.info(f"流式处理模式，分块大小: {chunksize:,}")
+            chunks = []
+            for i, chunk in enumerate(
+                pd.read_csv(
+                    input_path,
+                    sep=sep,
+                    header=header_arg,
+                    names=names_arg,
+                    chunksize=chunksize,
+                    low_memory=False,
+                    encoding="utf-8",
+                    on_bad_lines="warn",
+                )
+            ):
+                chunks.append(chunk)
+                if i % 10 == 0:
+                    logger.info(f"已处理 {(i + 1) * chunksize:,} 行...")
+            df = pd.concat(chunks, ignore_index=True)
+        else:
+            df = pd.read_csv(
+                input_path,
+                sep=sep,
+                header=header_arg,
+                names=names_arg,
+                low_memory=False,
+                encoding="utf-8",
+                on_bad_lines="warn",
+            )
 
         stats["load_time_s"] = time.time() - start_time
         stats["rows"] = len(df)
@@ -264,9 +303,53 @@ def main():
         action="store_true",
         help="转换成功后删除原始文件",
     )
+    parser.add_argument(
+        "--sep",
+        type=str,
+        default=None,
+        help="分隔符（默认自动推断，如 '\\t' 表示 Tab）",
+    )
+    parser.add_argument(
+        "--no-header",
+        action="store_true",
+        help="文件无表头，第一行即为数据",
+    )
+    parser.add_argument(
+        "--columns",
+        type=str,
+        default=None,
+        help="列名列表，逗号分隔或文件路径（每行一个列名）",
+    )
+    parser.add_argument(
+        "--chunksize",
+        type=int,
+        default=None,
+        help="流式处理分块大小（大文件推荐 100000）",
+    )
 
     args = parser.parse_args()
     input_path = Path(args.path)
+
+    # 处理分隔符参数
+    sep_arg = args.sep
+    if sep_arg == "\\t":
+        sep_arg = "\t"
+
+    # 处理表头参数
+    header_arg = None if args.no_header else "infer"
+
+    # 处理列名参数
+    columns_arg = None
+    if args.columns:
+        if Path(args.columns).exists():
+            # 从文件读取列名
+            with open(args.columns, "r", encoding="utf-8") as f:
+                columns_arg = [line.strip() for line in f if line.strip()]
+            logger.info(f"从文件加载列名: {len(columns_arg)} 个")
+        else:
+            # 直接解析逗号分隔的列名
+            columns_arg = [c.strip() for c in args.columns.split(",") if c.strip()]
+            logger.info(f"使用命令行列名: {len(columns_arg)} 个")
 
     # 检查 pyarrow 是否安装
     try:
@@ -306,6 +389,10 @@ def main():
                 input_path=file_path,
                 compression=args.compression,
                 dry_run=args.dry_run,
+                sep=sep_arg,
+                header=header_arg,
+                columns=columns_arg,
+                chunksize=args.chunksize,
             )
 
             if success:
@@ -331,6 +418,10 @@ def main():
             output_path=output_path,
             compression=args.compression,
             dry_run=args.dry_run,
+            sep=sep_arg,
+            header=header_arg,
+            columns=columns_arg,
+            chunksize=args.chunksize,
         )
 
         total_stats["total_files"] = 1
