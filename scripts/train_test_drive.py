@@ -143,7 +143,7 @@ def parse_args():
         "--num-bag-folds",
         type=int,
         default=None,
-        help="Bagging folds 数量（None=使用预设默认值，1=禁用 bagging）",
+        help="Bagging folds 数量（None=使用预设默认值，0=禁用 bagging，>=2=启用）",
     )
     parser.add_argument(
         "--num-stack-levels",
