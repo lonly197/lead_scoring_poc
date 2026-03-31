@@ -48,6 +48,16 @@ data/*.parquet
 outputs/
 !outputs/.gitkeep
 
+# Reports directory (task execution outputs)
+reports/
+!reports/.gitkeep
+
+# Temporary files
+*.tmp
+*.temp
+*.log
+*.bak
+
 # OS
 .DS_Store
 Thumbs.db
