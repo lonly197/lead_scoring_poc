@@ -174,8 +174,8 @@ def parse_args():
     parser.add_argument(
         "--max-memory-ratio",
         type=float,
-        default=0.8,
-        help="最大内存使用比例",
+        default=None,
+        help="最大内存使用比例（默认从 config 读取，16G 服务器建议 0.9）",
     )
     parser.add_argument(
         "--exclude-memory-heavy-models",
@@ -279,7 +279,8 @@ def train_single_model(
         problem_type="binary",
         sample_weight="balance_weight",
         weight_evaluation=False,
-        max_memory_usage_ratio=args.max_memory_ratio,
+        # 优先使用命令行参数，其次使用 config 默认值
+        max_memory_usage_ratio=args.max_memory_ratio if args.max_memory_ratio is not None else config.model.max_memory_ratio,
         excluded_model_types=excluded_model_types,
         num_folds_parallel=args.num_folds_parallel,
         included_model_types=included_model_types,
@@ -417,7 +418,8 @@ def train_single_model_spawn(
         problem_type="binary",
         sample_weight="balance_weight",
         weight_evaluation=False,
-        max_memory_usage_ratio=getattr(args, "max_memory_ratio", 0.8),
+        # 优先使用命令行参数，其次使用 config 默认值
+        max_memory_usage_ratio=args.max_memory_ratio if args.max_memory_ratio is not None else config.model.max_memory_ratio,
         excluded_model_types=excluded_model_types,
         num_folds_parallel=getattr(args, "num_folds_parallel", None),
         included_model_types=included_model_types,

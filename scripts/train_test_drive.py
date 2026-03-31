@@ -112,8 +112,8 @@ def parse_args():
     parser.add_argument(
         "--max-memory-ratio",
         type=float,
-        default=0.8,
-        help="最大内存使用比例（默认 0.8，低内存机器建议 0.6-0.8）",
+        default=None,
+        help="最大内存使用比例（默认从 config 读取，16G 服务器建议 0.9）",
     )
     parser.add_argument(
         "--exclude-memory-heavy-models",
@@ -318,7 +318,8 @@ def main():
             # weight_evaluation 设为 False 以兼容 AutoGluon 动态堆叠
             # 样本权重已在训练时生效，评估时无需额外权重
             weight_evaluation=False,
-            max_memory_usage_ratio=args.max_memory_ratio,
+            # 优先使用命令行参数，其次使用 config 默认值
+            max_memory_usage_ratio=args.max_memory_ratio if args.max_memory_ratio is not None else config.model.max_memory_ratio,
             excluded_model_types=excluded_model_types,
             num_folds_parallel=args.num_folds_parallel,
             included_model_types=included_model_types,

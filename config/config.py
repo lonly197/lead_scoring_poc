@@ -131,6 +131,12 @@ class ModelConfig:
         default_factory=lambda: os.getenv("FEATURE_IMPORTANCE_FAST_MODE", "true").lower() in {"1", "true", "yes", "y", "on"}
     )
 
+    # 内存使用比例限制（CatBoost 需要 >=0.9 才能通过内存检查）
+    # 16G 服务器建议 0.9，32G+ 服务器可用默认值 0.8
+    max_memory_ratio: float = field(
+        default_factory=lambda: float(os.getenv("MODEL_MAX_MEMORY_RATIO", "0.8"))
+    )
+
 
 @dataclass
 class OHABConfig:
