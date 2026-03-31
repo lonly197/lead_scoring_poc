@@ -1226,6 +1226,80 @@ wheels = [
 ]
 
 [[package]]
+name = "duckdb"
+version = "1.4.4"
+source = { registry = "https://mirrors.aliyun.com/pypi/simple/" }
+resolution-markers = [
+    "(python_full_version < '3.10' and platform_machine != 'x86_64') or (python_full_version < '3.10' and sys_platform != 'darwin')",
+    "python_full_version < '3.10' and platform_machine == 'x86_64' and sys_platform == 'darwin'",
+]
+sdist = { url = "https://mirrors.aliyun.com/pypi/packages/36/9d/ab66a06e416d71b7bdcb9904cdf8d4db3379ef632bb8e9495646702d9718/duckdb-1.4.4.tar.gz", hash = "sha256:8bba52fd2acb67668a4615ee17ee51814124223de836d9e2fdcbc4c9021b3d3c" }
+wheels = [
+    { url = "https://mirrors.aliyun.com/pypi/packages/a2/9f/67a75f1e88f84946909826fa7aadd0c4b0dc067f24956142751fd9d59fe6/duckdb-1.4.4-cp310-cp310-macosx_10_9_universal2.whl", hash = "sha256:e870a441cb1c41d556205deb665749f26347ed13b3a247b53714f5d589596977" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/6b/7a/e9277d0567884c21f345ad43cc01aeaa2abe566d5fdf22e35c3861dd44fa/duckdb-1.4.4-cp310-cp310-macosx_10_9_x86_64.whl", hash = "sha256:49123b579e4a6323e65139210cd72dddc593a72d840211556b60f9703bda8526" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/4a/96/3a7630d2779d2bae6f3cdf540a088ed45166adefd3c429971e5b85ce8f84/duckdb-1.4.4-cp310-cp310-macosx_11_0_arm64.whl", hash = "sha256:5e1933fac5293fea5926b0ee75a55b8cfe7f516d867310a5b251831ab61fe62b" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/8e/ad/f62a3a65d200e8afc1f75cf0dd3f0aa84ef0dd07c484414a11f2abed810e/duckdb-1.4.4-cp310-cp310-manylinux_2_26_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:707530f6637e91dc4b8125260595299ec9dd157c09f5d16c4186c5988bfbd09a" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/a2/5f/23bd586ecb21273b41b5aa4b16fd88b7fecb53ed48d897273651c0c3d66f/duckdb-1.4.4-cp310-cp310-manylinux_2_26_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:453b115f4777467f35103d8081770ac2f223fb5799178db5b06186e3ab51d1f2" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/8b/d0/4ce78bf341c930d4a22a56cb686bfc2c975eaf25f653a7ac25e3929d98bb/duckdb-1.4.4-cp310-cp310-win_amd64.whl", hash = "sha256:a3c8542db7ffb128aceb7f3b35502ebaddcd4f73f1227569306cc34bad06680c" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/04/68/19233412033a2bc5a144a3f531f64e3548d4487251e3f16b56c31411a06f/duckdb-1.4.4-cp311-cp311-macosx_10_9_universal2.whl", hash = "sha256:5ba684f498d4e924c7e8f30dd157da8da34c8479746c5011b6c0e037e9c60ad2" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/b3/3e/cec70e546c298ab76d80b990109e111068d82cca67942c42328eaa7d6fdb/duckdb-1.4.4-cp311-cp311-macosx_10_9_x86_64.whl", hash = "sha256:5536eb952a8aa6ae56469362e344d4e6403cc945a80bc8c5c2ebdd85d85eb64b" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/d3/f0/cf4241a040ec4f571859a738007ec773b642fbc27df4cbcf34b0c32ea559/duckdb-1.4.4-cp311-cp311-macosx_11_0_arm64.whl", hash = "sha256:47dd4162da6a2be59a0aef640eb08d6360df1cf83c317dcc127836daaf3b7f7c" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/11/64/de2bb4ec1e35ec9ebf6090a95b930fc56934a0ad6f34a24c5972a14a77ef/duckdb-1.4.4-cp311-cp311-manylinux_2_26_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:6cb357cfa3403910e79e2eb46c8e445bb1ee2fd62e9e9588c6b999df4256abc1" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/79/a2/ac0f5ee16df890d141304bcd48733516b7202c0de34cd3555634d6eb4551/duckdb-1.4.4-cp311-cp311-manylinux_2_26_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:4c25d5b0febda02b7944e94fdae95aecf952797afc8cb920f677b46a7c251955" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/37/a2/9a3402edeedaecf72de05fe9ff7f0303d701b8dfc136aea4a4be1a5f7eee/duckdb-1.4.4-cp311-cp311-win_amd64.whl", hash = "sha256:6703dd1bb650025b3771552333d305d62ddd7ff182de121483d4e042ea6e2e00" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/f6/e6/052ea6dcdf35b259fd182eff3efd8d75a071de4010c9807556098df137b9/duckdb-1.4.4-cp311-cp311-win_arm64.whl", hash = "sha256:bf138201f56e5d6fc276a25138341b3523e2f84733613fc43f02c54465619a95" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/58/33/beadaa69f8458afe466126f2c5ee48c4759cc9d5d784f8703d44e0b52c3c/duckdb-1.4.4-cp312-cp312-macosx_10_13_universal2.whl", hash = "sha256:ddcfd9c6ff234da603a1edd5fd8ae6107f4d042f74951b65f91bc5e2643856b3" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/76/66/82413f386df10467affc87f65bac095b7c88dbd9c767584164d5f4dc4cb8/duckdb-1.4.4-cp312-cp312-macosx_10_13_x86_64.whl", hash = "sha256:6792ca647216bd5c4ff16396e4591cfa9b4a72e5ad7cdd312cec6d67e8431a7c" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/5d/8c/c13d396fd4e9bf970916dc5b4fea410c1b10fe531069aea65f1dcf849a71/duckdb-1.4.4-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:1f8d55843cc940e36261689054f7dfb6ce35b1f5b0953b0d355b6adb654b0d52" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/db/77/2446a0b44226bb95217748d911c7ca66a66ca10f6481d5178d9370819631/duckdb-1.4.4-cp312-cp312-manylinux_2_26_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:c65d15c440c31e06baaebfd2c06d71ce877e132779d309f1edf0a85d23c07e92" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/2e/a3/97715bba30040572fb15d02c26f36be988d48bc00501e7ac02b1d65ef9d0/duckdb-1.4.4-cp312-cp312-manylinux_2_26_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:b297eff642503fd435a9de5a9cb7db4eccb6f61d61a55b30d2636023f149855f" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/8b/0a/18b9167adf528cbe3867ef8a84a5f19f37bedccb606a8a9e59cfea1880c8/duckdb-1.4.4-cp312-cp312-win_amd64.whl", hash = "sha256:d525de5f282b03aa8be6db86b1abffdceae5f1055113a03d5b50cd2fb8cf2ef8" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/f8/15/37af97f5717818f3d82d57414299c293b321ac83e048c0a90bb8b6a09072/duckdb-1.4.4-cp312-cp312-win_arm64.whl", hash = "sha256:50f2eb173c573811b44aba51176da7a4e5c487113982be6a6a1c37337ec5fa57" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/00/c1/edb090813533632b0eaa315092efcf60d5f835f6b74bd25b3fee2c993810/duckdb-1.4.4-cp39-cp39-macosx_10_9_universal2.whl", hash = "sha256:8097201bc5fd0779d7fcc2f3f4736c349197235f4cb7171622936343a1aa8dbf" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/9f/01/b19f532ee7340ef11c3363300f677074d7d2bf03af5ac76efacf03b4dd76/duckdb-1.4.4-cp39-cp39-macosx_10_9_x86_64.whl", hash = "sha256:cd1be3d48577f5b40eb9706c6b2ae10edfe18e78eb28e31a3b922dcff1183597" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/08/cd/73cde196b809fc934acd39f05e730f7758e15e845486ee5219fc0513701e/duckdb-1.4.4-cp39-cp39-macosx_11_0_arm64.whl", hash = "sha256:e041f2fbd6888da090eca96ac167a7eb62d02f778385dd9155ed859f1c6b6dc8" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/de/6a/1aea416dbb729c1548ce6b66c3283dd5441660939ec16077ba431bec6b42/duckdb-1.4.4-cp39-cp39-manylinux_2_26_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:7eec0bf271ac622e57b7f6554a27a6e7d1dd2f43d1871f7962c74bcbbede15ba" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/a1/6d/697bf9688d5c5b470a7210123430661d5f9bd10c9f0aeffa54799de6712d/duckdb-1.4.4-cp39-cp39-manylinux_2_26_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:5cdc4126ec925edf3112bc656ac9ed23745294b854935fa7a643a216e4455af6" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/23/60/8e491e199839a488cd302166defc51c62c25ea2cb36adee14156e610dcfc/duckdb-1.4.4-cp39-cp39-win_amd64.whl", hash = "sha256:c9566a4ed834ec7999db5849f53da0a7ee83d86830c33f471bf0211a1148ca12" },
+]
+
+[[package]]
+name = "duckdb"
+version = "1.5.1"
+source = { registry = "https://mirrors.aliyun.com/pypi/simple/" }
+resolution-markers = [
+    "(python_full_version >= '3.12' and platform_machine != 'x86_64') or (python_full_version >= '3.12' and sys_platform != 'darwin')",
+    "python_full_version >= '3.12' and platform_machine == 'x86_64' and sys_platform == 'darwin'",
+    "(python_full_version == '3.11.*' and platform_machine != 'x86_64') or (python_full_version == '3.11.*' and sys_platform != 'darwin')",
+    "python_full_version == '3.11.*' and platform_machine == 'x86_64' and sys_platform == 'darwin'",
+    "(python_full_version == '3.10.*' and platform_machine != 'x86_64') or (python_full_version == '3.10.*' and sys_platform != 'darwin')",
+    "python_full_version == '3.10.*' and platform_machine == 'x86_64' and sys_platform == 'darwin'",
+]
+sdist = { url = "https://mirrors.aliyun.com/pypi/packages/ae/62/590caabec6c41003f46a244b6fd707d35ca2e552e0c70cbf454e08bf6685/duckdb-1.5.1.tar.gz", hash = "sha256:b370d1620a34a4538ef66524fcee9de8171fa263c701036a92bc0b4c1f2f9c6d" }
+wheels = [
+    { url = "https://mirrors.aliyun.com/pypi/packages/eb/63/d6477057ea6103f80ed9499580c8602183211689889ec50c32f25a935e3d/duckdb-1.5.1-cp310-cp310-macosx_10_9_universal2.whl", hash = "sha256:46f92ada9023e59f27edc048167b31ac9a03911978b1296c845a34462a27f096" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/ba/b8/22e6c605d9281df7a83653f4a60168eec0f650b23f1d4648aca940d79d00/duckdb-1.5.1-cp310-cp310-macosx_10_9_x86_64.whl", hash = "sha256:caa65e1f5bf007430bf657c37cab7ab81a4ddf8d337e3062bcc5085d17ef038b" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/85/b1/88a457cd3105525cba0d4c155f847c5c32fa4f543d3ba4ee38b4fd75f82e/duckdb-1.5.1-cp310-cp310-macosx_11_0_arm64.whl", hash = "sha256:8c0088765747ae5d6c9f89987bb36f9fb83564f07090d721344ce8e1abedffea" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/c5/3b/800c3f1d54ae0062b3e9b0b54fc54d6c155d731311931d748fc9c5c565f9/duckdb-1.5.1-cp310-cp310-manylinux_2_26_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:e56a20ab6cdb90a95b0c99652e28de3504ce77129087319c03c9098266183ae5" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/3a/09/4c4dd94f521d016e0fb83cca2c203d10ce1e3f8bcc679691b5271fc98b83/duckdb-1.5.1-cp310-cp310-manylinux_2_26_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:715f05ea198d20d7f8b407b9b84e0023d17f2b9096c194cea702b7840e74f1f7" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/d0/b3/eb3c70be70d0b3fa6c8051d6fa4b7fb3d5787fa77b3f50b7e38d5f7cc6fd/duckdb-1.5.1-cp310-cp310-win_amd64.whl", hash = "sha256:e878ccb7d20872065e1597935fdb5e65efa43220c8edd0d9c4a1a7ff1f3eb277" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/42/3e/827ffcf58f0abc6ad6dcf826c5d24ebfc65e03ad1a20d74cad9806f91c99/duckdb-1.5.1-cp311-cp311-macosx_10_9_universal2.whl", hash = "sha256:bc7ca6a1a40e7e4c933017e6c09ef18032add793df4e42624c6c0c87e0bebdad" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/04/b5/e921ecf8a7e0cc7da2100c98bef64b3da386df9444f467d6389364851302/duckdb-1.5.1-cp311-cp311-macosx_10_9_x86_64.whl", hash = "sha256:446d500a2977c6ae2077f340c510a25956da5c77597175c316edfa87248ceda3" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/dd/da/ed804006cd09ba303389d573c8b15d74220667cbd1fd990c26e98d0e0a5b/duckdb-1.5.1-cp311-cp311-macosx_11_0_arm64.whl", hash = "sha256:b8b0808dba0c63b7633bdaefb34e08fe0612622224f9feb0e7518904b1615101" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/b3/43/c904d81a61306edab81a9d74bb37bbe65679639abb7030d4c4fec9ed84f7/duckdb-1.5.1-cp311-cp311-manylinux_2_26_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:553c273a6a8f140adaa6da6a6135c7f95bdc8c2e5f95252fcdf9832d758e2141" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/50/db/358715d677bfe5e117d9e1f2d6cc2fc2b0bd621144d1f15335b8b59f95d7/duckdb-1.5.1-cp311-cp311-manylinux_2_26_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:40c5220ec93790b18ec6278da9c6ac2608d997ee6d6f7cd44c5c3992764e8e71" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/3f/db/fd647ce46315347976f5576a279bacb8134d23b1f004bd0bcda7ce9cf429/duckdb-1.5.1-cp311-cp311-win_amd64.whl", hash = "sha256:36e8e32621a9e2a9abe75dc15a4b54a3997f2d8b1e53ad754bae48a083c91130" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/27/95/e29d42792707619da5867ffab338d7e7b086242c7296aa9cfc6dcf52d568/duckdb-1.5.1-cp311-cp311-win_arm64.whl", hash = "sha256:5ae7c0d744d64e2753149634787cc4ab60f05ef1e542b060eeab719f3cdb7723" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/3f/06/be4c62f812c6e23898733073ace0482eeb18dffabe0585d63a3bf38bca1e/duckdb-1.5.1-cp312-cp312-macosx_10_13_universal2.whl", hash = "sha256:6f7361d66cc801d9eb4df734b139cd7b0e3c257a16f3573ebd550ddb255549e6" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/44/03/1794dcdda75ff203ab0982ff7eb5232549b58b9af66f243f1b7212d6d6be/duckdb-1.5.1-cp312-cp312-macosx_10_13_x86_64.whl", hash = "sha256:0a6acc2040bec1f05de62a2f3f68f4c12f3ec7d6012b4317d0ab1a195af26225" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/87/03/293bccd838a293d42ea26dec7f4eb4f58b57b6c9ffcfabc6518a5f20a24a/duckdb-1.5.1-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:ed6d23a3f806898e69c77430ebd8da0c79c219f97b9acbc9a29a653e09740c59" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/15/2c/7b4f11879aa2924838168b4640da999dccda1b4a033d43cb998fd6dc33ea/duckdb-1.5.1-cp312-cp312-manylinux_2_26_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:6af347debc8b721aa72e48671166282da979d5e5ae52dbc660ab417282b48e23" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/6f/d6/8f9a6b1fbcc669108ec6a4d625a70be9e480b437ed9b70cd56b78cd577a6/duckdb-1.5.1-cp312-cp312-manylinux_2_26_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:8150c569b2aa4573b51ba8475e814aa41fd53a3d510c1ffb96f1139f46faf611" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/c4/fe/8d02c6473273468cf8d43fd5d73c677f8cdfcd036c1e884df0613f124c2b/duckdb-1.5.1-cp312-cp312-win_amd64.whl", hash = "sha256:054ad424b051b334052afac58cb216f3b1ebb8579fc8c641e60f0182e8725ea9" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/96/0b/2be786b9c153eb263bf5d3d5f7ab621b14a715d7e70f92b24ecf8536369e/duckdb-1.5.1-cp312-cp312-win_arm64.whl", hash = "sha256:6ba302115f63f6482c000ccfd62efdb6c41d9d182a5bcd4a90e7ab8cd13856eb" },
+]
+
+[[package]]
 name = "et-xmlfile"
 version = "2.0.0"
 source = { registry = "https://mirrors.aliyun.com/pypi/simple/" }
@@ -1370,6 +1444,47 @@ dependencies = [
 sdist = { url = "https://mirrors.aliyun.com/pypi/packages/08/be/d2c2e8dc81aa88316ed27f1bd707440a83a7420c35e67c0b143fe81aeca9/fastdownload-0.0.7.tar.gz", hash = "sha256:20507edb8e89406a1fbd7775e6e2a3d81a4dd633dd506b0e9cf0e1613e831d6a" }
 wheels = [
     { url = "https://mirrors.aliyun.com/pypi/packages/47/60/ed35253a05a70b63e4f52df1daa39a6a464a3e22b0bd060b77f63e2e2b6a/fastdownload-0.0.7-py3-none-any.whl", hash = "sha256:b791fa3406a2da003ba64615f03c60e2ea041c3c555796450b9a9a601bc0bbac" },
+]
+
+[[package]]
+name = "fastexcel"
+version = "0.16.0"
+source = { registry = "https://mirrors.aliyun.com/pypi/simple/" }
+resolution-markers = [
+    "(python_full_version < '3.10' and platform_machine != 'x86_64') or (python_full_version < '3.10' and sys_platform != 'darwin')",
+    "python_full_version < '3.10' and platform_machine == 'x86_64' and sys_platform == 'darwin'",
+]
+dependencies = [
+    { name = "typing-extensions", marker = "python_full_version < '3.10'" },
+]
+sdist = { url = "https://mirrors.aliyun.com/pypi/packages/b0/7c/77fe2f25c4ff1c798b021cad7cddf00ff2a42118b9b59eec8ef5f0d5b5cf/fastexcel-0.16.0.tar.gz", hash = "sha256:7f6597ee86e0cda296bcc620d20fcf2de9903f8d3b99b365b7f45248d535556d" }
+wheels = [
+    { url = "https://mirrors.aliyun.com/pypi/packages/cc/44/2dc31ec48d8f63f1d93e11ef19636a442c39775d49f1472f4123a6b38c34/fastexcel-0.16.0-cp39-abi3-macosx_10_12_x86_64.whl", hash = "sha256:48c56a501abc1cf0890294527dc924cb0d919fd5095f684ebcf52806135e9df8" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/e2/d8/ef4489cd00fe9fe52bef176ed32a8bb5837dd97518bb950bbd68f546ed1c/fastexcel-0.16.0-cp39-abi3-macosx_11_0_arm64.whl", hash = "sha256:bae61533745fae226ea19f6d198570d5c76a8de816e222ff717aff82d8d6e473" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/a1/cc/95cf27168d4b4fec3d2e404d70a0fb5d5b7a18872192c8cd8b3a272d31dc/fastexcel-0.16.0-cp39-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:ec1c56b9b3b7b7ff2bde64dbe0e378a707287aff9deeb71ff6d0f8c3b7d24e34" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/c8/23/02012e9c7e584e6f85e1e7078beff3dc56aaad2e51b0a33bbcaa1dc2aa6e/fastexcel-0.16.0-cp39-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:e1059eac593f4b92843ac9d10901677cccc2a8152c67e315c9dfbd7ce7c722e7" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/9c/2e/805c2d0e799710e4937d084d9c37821bafa129eda1de62c3279a042ca56d/fastexcel-0.16.0-cp39-abi3-win_amd64.whl", hash = "sha256:04c2b6fea7292e26d76a458f9095f4ec260c864c90be7a7161d20ca81cf77fd8" },
+]
+
+[[package]]
+name = "fastexcel"
+version = "0.19.0"
+source = { registry = "https://mirrors.aliyun.com/pypi/simple/" }
+resolution-markers = [
+    "(python_full_version >= '3.12' and platform_machine != 'x86_64') or (python_full_version >= '3.12' and sys_platform != 'darwin')",
+    "python_full_version >= '3.12' and platform_machine == 'x86_64' and sys_platform == 'darwin'",
+    "(python_full_version == '3.11.*' and platform_machine != 'x86_64') or (python_full_version == '3.11.*' and sys_platform != 'darwin')",
+    "python_full_version == '3.11.*' and platform_machine == 'x86_64' and sys_platform == 'darwin'",
+    "(python_full_version == '3.10.*' and platform_machine != 'x86_64') or (python_full_version == '3.10.*' and sys_platform != 'darwin')",
+    "python_full_version == '3.10.*' and platform_machine == 'x86_64' and sys_platform == 'darwin'",
+]
+sdist = { url = "https://mirrors.aliyun.com/pypi/packages/0d/c8/3b09911348e9c64dbf41096d3e8f0e93c141a23990ec9f32514111bd5f55/fastexcel-0.19.0.tar.gz", hash = "sha256:216c3719ee90963bd93a0bf8c10b177233046ac975b67651152fdaedd3c99aa1" }
+wheels = [
+    { url = "https://mirrors.aliyun.com/pypi/packages/d1/e0/3820e93ea606549cfddb8c437141dd69f2b245e74785efc8bd7511ba909d/fastexcel-0.19.0-cp310-abi3-macosx_10_12_x86_64.whl", hash = "sha256:68601072a0b4b4277c165b68f1055f88ef7ffe7ed6f08c1eeda0f0271e3f7da0" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/66/0f/b42dc09515879192919942157292912393584045fd8bad98bd92961d4c30/fastexcel-0.19.0-cp310-abi3-macosx_11_0_arm64.whl", hash = "sha256:c8a87d94445678e7e3f46a6aa39d2afaee5b88a983ec3661143a6488d8955f44" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/8e/4a/bc358b20fcff64b4c14ff7d7a0e1f797792b8b77e30ae755873c02362538/fastexcel-0.19.0-cp310-abi3-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:e94fc1be6642555f277af792c22a9f80ec9b4d640d9690f00abb822b6d865069" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/58/ae/d2ffdc5ad14190153e2422fc90a1052a4b0c3086d24cb8ae8967575321d8/fastexcel-0.19.0-cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:334f9f40cd68b5924a712b6c104949757a0b8ad8a7e3fa3f3fad1c1ebc00258b" },
+    { url = "https://mirrors.aliyun.com/pypi/packages/6e/67/5f6d4e7760dc3dd8244cd124dabdd5bb7622bf1197edcc2513648847690e/fastexcel-0.19.0-cp310-abi3-win_amd64.whl", hash = "sha256:fbbdf9de79c3ef3572809bb187927c0dc5840968ffe513ea015a383024b7c6b0" },
 ]
 
 [[package]]
@@ -2596,6 +2711,10 @@ source = { editable = "." }
 dependencies = [
     { name = "autogluon-tabular", version = "1.4.0", source = { registry = "https://mirrors.aliyun.com/pypi/simple/" }, extra = ["catboost", "fastai", "lightgbm", "xgboost"], marker = "(python_full_version < '3.10' and platform_machine != 'x86_64') or (python_full_version < '3.10' and sys_platform != 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'darwin')" },
     { name = "autogluon-tabular", version = "1.5.0", source = { registry = "https://mirrors.aliyun.com/pypi/simple/" }, extra = ["catboost", "fastai", "lightgbm", "xgboost"], marker = "(python_full_version >= '3.10' and platform_machine != 'x86_64') or (python_full_version >= '3.10' and sys_platform != 'darwin')" },
+    { name = "duckdb", version = "1.4.4", source = { registry = "https://mirrors.aliyun.com/pypi/simple/" }, marker = "python_full_version < '3.10'" },
+    { name = "duckdb", version = "1.5.1", source = { registry = "https://mirrors.aliyun.com/pypi/simple/" }, marker = "python_full_version >= '3.10'" },
+    { name = "fastexcel", version = "0.16.0", source = { registry = "https://mirrors.aliyun.com/pypi/simple/" }, marker = "python_full_version < '3.10'" },
+    { name = "fastexcel", version = "0.19.0", source = { registry = "https://mirrors.aliyun.com/pypi/simple/" }, marker = "python_full_version >= '3.10'" },
     { name = "matplotlib", version = "3.9.4", source = { registry = "https://mirrors.aliyun.com/pypi/simple/" }, marker = "python_full_version < '3.10'" },
     { name = "matplotlib", version = "3.10.8", source = { registry = "https://mirrors.aliyun.com/pypi/simple/" }, marker = "python_full_version >= '3.10'" },
     { name = "numpy", version = "2.0.2", source = { registry = "https://mirrors.aliyun.com/pypi/simple/" }, marker = "python_full_version < '3.10'" },
@@ -2627,6 +2746,8 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "autogluon-tabular", extras = ["lightgbm", "catboost", "xgboost", "fastai"], specifier = ">=1.2.0" },
+    { name = "duckdb", specifier = ">=0.10.0" },
+    { name = "fastexcel", specifier = ">=0.11.0" },
     { name = "ipykernel", marker = "extra == 'dev'", specifier = ">=6.0.0" },
     { name = "jupyter", marker = "extra == 'dev'", specifier = ">=1.0.0" },
     { name = "matplotlib", specifier = ">=3.7.0" },
