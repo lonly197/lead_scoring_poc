@@ -3,6 +3,7 @@
 模型预测脚本
 
 对输入数据进行预测，将预测结果追加到 DataFrame 中返回。
+支持 OHAB 评级推导：O 级（已成交）/ H 级 / A 级 / B 级 / N 级。
 
 使用方法：
     # 基本用法
@@ -11,12 +12,20 @@
         --data-path ./data/final_v4_test.parquet \
         --output ./predictions.csv
 
+    # 包含 OHAB 评级
+    uv run python scripts/predict.py \
+        --model-path ./outputs/models/test_drive_model \
+        --data-path ./data/final_v4_test.parquet \
+        --output ./predictions.csv \
+        --include-ohab
+
     # 返回完整 DataFrame（含原始列 + 预测列）
     uv run python scripts/predict.py \
         --model-path ./outputs/models/test_drive_model \
         --data-path ./data/final_v4_test.parquet \
         --output ./predictions.csv \
-        --include-original
+        --include-original \
+        --include-ohab
 """
 
 from __future__ import annotations
@@ -28,6 +37,7 @@ import sys
 from pathlib import Path
 from typing import Optional
 
+import numpy as np
 import pandas as pd
 
 # 添加项目根目录到路径
@@ -50,11 +60,113 @@ def load_feature_metadata(model_path: Path) -> dict:
     return {}
 
 
+def detect_ordered_status(df: pd.DataFrame) -> np.ndarray:
+    """
+    检测已成交状态（O 级）
+
+    根据以下字段判断线索是否已下定/成交：
+    - 下订时间不为空
+    - 成交标签 = 1
+    - is_final_ordered = 1
+    - 下定状态 = 已下定/已成交等
+
+    Args:
+        df: 输入数据 DataFrame
+
+    Returns:
+        布尔数组，True 表示已成交
+    """
+    is_ordered = np.zeros(len(df), dtype=bool)
+
+    # 1. 检查下订时间
+    if "下订时间" in df.columns:
+        is_ordered |= df["下订时间"].notna()
+
+    # 2. 检查成交标签
+    if "成交标签" in df.columns:
+        is_ordered |= (df["成交标签"] == 1)
+
+    # 3. 检查 is_final_ordered
+    if "is_final_ordered" in df.columns:
+        is_ordered |= (df["is_final_ordered"] == 1)
+
+    # 4. 检查下定状态
+    if "下定状态" in df.columns:
+        ordered_keywords = ["已下定", "已成交", "已订车", "成交", "订车"]
+        for kw in ordered_keywords:
+            is_ordered |= df["下定状态"].astype(str).str.contains(kw, na=False)
+
+    # 5. 检查订单状态
+    if "订单状态" in df.columns:
+        ordered_keywords = ["已下定", "已成交", "已订车", "成交", "订车", "已完成"]
+        for kw in ordered_keywords:
+            is_ordered |= df["订单状态"].astype(str).str.contains(kw, na=False)
+
+    return is_ordered
+
+
+def derive_ohab_rating(
+    y_proba: np.ndarray,
+    is_ordered: np.ndarray,
+    threshold: float = 0.5,
+) -> np.ndarray:
+    """
+    推导 OHAB 评级
+
+    业务规则（来自《O/H/A/B定级业务规则》）：
+    - O 级：已订车、已成交
+    - H 级：客户计划 7 天内试驾
+    - A 级：客户计划 14 天内试驾
+    - B 级：客户计划 21 天内试驾
+    - N 级：无意向
+
+    推导逻辑（基于 14 天试驾概率）：
+    - O 级：已成交状态（优先级最高）
+    - H 级：P(14天试驾) >= threshold 且预测标签 = 1（高置信度正例）
+    - A 级：P(14天试驾) >= threshold（中等置信度）
+    - B 级：threshold/2 <= P(14天试驾) < threshold（低置信度）
+    - N 级：P(14天试驾) < threshold/2（无意向）
+
+    Args:
+        y_proba: 预测概率数组（14 天试驾概率）
+        is_ordered: 已成交状态数组
+        threshold: 评级判定阈值
+
+    Returns:
+        OHAB 评级数组
+    """
+    ratings = np.full(len(y_proba), "N", dtype=object)
+
+    # 1. O 级：已成交（最高优先级）
+    ratings[is_ordered] = "O"
+
+    # 2. 非成交样本：根据概率判断 H/A/B/N
+    not_ordered = ~is_ordered
+
+    # H 级：高置信度正例（概率 >= threshold 且预测标签 = 1）
+    h_mask = not_ordered & (y_proba >= threshold)
+    ratings[h_mask] = "H"
+
+    # A 级：中等置信度（threshold * 0.7 <= 概率 < threshold）
+    a_mask = not_ordered & (y_proba >= threshold * 0.7) & (y_proba < threshold)
+    ratings[a_mask] = "A"
+
+    # B 级：低置信度（threshold * 0.3 <= 概率 < threshold * 0.7）
+    b_mask = not_ordered & (y_proba >= threshold * 0.3) & (y_proba < threshold * 0.7)
+    ratings[b_mask] = "B"
+
+    # N 级：无意向（概率 < threshold * 0.3）- 已默认
+
+    return ratings
+
+
 def predict(
     model_path: str,
     data_path: str,
     output_path: Optional[str] = None,
     include_original: bool = False,
+    include_ohab: bool = False,
+    ohab_threshold: float = 0.5,
     id_column: str = "线索唯一ID",
 ) -> pd.DataFrame:
     """
@@ -65,6 +177,8 @@ def predict(
         data_path: 数据文件路径
         output_path: 输出文件路径（可选）
         include_original: 是否包含原始列
+        include_ohab: 是否包含 OHAB 评级
+        ohab_threshold: OHAB 评级判定阈值
         id_column: ID 列名（用于标识记录）
 
     Returns:
@@ -126,9 +240,20 @@ def predict(
     result_df["预测概率"] = y_proba
     result_df["预测标签"] = y_pred
 
+    # 8. OHAB 评级推导
+    if include_ohab:
+        logger.info("推导 OHAB 评级...")
+        is_ordered = detect_ordered_status(df)
+        ohab_ratings = derive_ohab_rating(y_proba, is_ordered, threshold=ohab_threshold)
+        result_df["OHAB评级"] = ohab_ratings
+
+        # 统计 OHAB 分布
+        ohab_dist = pd.Series(ohab_ratings).value_counts()
+        logger.info(f"OHAB 分布: {ohab_dist.to_dict()}")
+
     logger.info(f"预测完成: {len(result_df)} 条记录")
 
-    # 8. 保存输出
+    # 9. 保存输出
     if output_path:
         output_path = Path(output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -164,6 +289,17 @@ def parse_args():
         help="包含原始数据列（默认仅输出 ID + 预测结果）",
     )
     parser.add_argument(
+        "--include-ohab",
+        action="store_true",
+        help="包含 OHAB 评级（O/H/A/B/N）",
+    )
+    parser.add_argument(
+        "--ohab-threshold",
+        type=float,
+        default=0.5,
+        help="OHAB 评级判定阈值（默认: 0.5）",
+    )
+    parser.add_argument(
         "--id-column",
         type=str,
         default="线索唯一ID",
@@ -186,6 +322,8 @@ def main():
         data_path=args.data_path,
         output_path=args.output,
         include_original=args.include_original,
+        include_ohab=args.include_ohab,
+        ohab_threshold=args.ohab_threshold,
         id_column=args.id_column,
     )
 
@@ -201,6 +339,13 @@ def main():
     print(f"  最小值: {result_df['预测概率'].min():.4f}")
     print(f"\n预测标签分布:")
     print(result_df["预测标签"].value_counts())
+
+    if "OHAB评级" in result_df.columns:
+        print(f"\nOHAB 评级分布:")
+        for rating in ["O", "H", "A", "B", "N"]:
+            count = (result_df["OHAB评级"] == rating).sum()
+            pct = count / len(result_df) * 100
+            print(f"  {rating} 级: {count} ({pct:.2f}%)")
 
     if args.output:
         print(f"\n结果已保存: {args.output}")

@@ -262,6 +262,13 @@ uv run python scripts/validate_model.py \
 
 对输入数据进行预测，将预测结果追加到 DataFrame 中返回。与验证脚本不同，predict.py 不要求目标标签存在，专注于纯推理。
 
+**支持 OHAB 评级推导**：根据业务规则，自动推导线索等级：
+- **O 级**：已订车/已成交（检测下订时间、成交标签等字段）
+- **H 级**：高意向，7天内计划试驾
+- **A 级**：中意向，14天内计划试驾
+- **B 级**：低意向，21天内计划试驾
+- **N 级**：无意向
+
 ```bash
 # 基本用法：输出 ID + 预测结果
 uv run python scripts/predict.py \
@@ -269,12 +276,20 @@ uv run python scripts/predict.py \
     --data-path ./data/final_v4_test.parquet \
     --output ./predictions.csv
 
+# 包含 OHAB 评级
+uv run python scripts/predict.py \
+    --model-path ./outputs/models/test_drive_model \
+    --data-path ./data/final_v4_test.parquet \
+    --output ./predictions.csv \
+    --include-ohab
+
 # 包含原始数据列
 uv run python scripts/predict.py \
     --model-path ./outputs/models/test_drive_model \
     --data-path ./data/final_v4_test.parquet \
     --output ./predictions_full.csv \
-    --include-original
+    --include-original \
+    --include-ohab
 ```
 
 **参数说明**：
@@ -285,13 +300,23 @@ uv run python scripts/predict.py \
 | `--data-path` | 数据文件路径（必需） | - |
 | `--output` | 输出文件路径 | 不保存 |
 | `--include-original` | 包含原始数据列 | False |
+| `--include-ohab` | 包含 OHAB 评级 | False |
+| `--ohab-threshold` | OHAB 评级判定阈值 | 0.5 |
 | `--id-column` | ID 列名 | 线索唯一ID |
+
+**O 级检测字段**（优先级最高）：
+- `下订时间` 不为空
+- `成交标签` = 1
+- `is_final_ordered` = 1
+- `下定状态` 包含"已下定"/"已成交"等关键词
+- `订单状态` 包含"已下定"/"已成交"等关键词
 
 **输出格式**：
 
 | 模式 | 列数 | 内容 |
 |------|------|------|
 | 默认 | 3 列 | `线索唯一ID`, `预测概率`, `预测标签` |
+| `--include-ohab` | 4 列 | 增加 `OHAB评级` |
 | `--include-original` | 完整列 | 原始数据 + 预处理列 + 预测结果 |
 
 ---

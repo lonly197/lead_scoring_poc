@@ -105,13 +105,28 @@ uv run python scripts/predict.py \
     --data-path ./data/final_v4_test.parquet \
     --output ./predictions.csv
 
+# 包含 OHAB 评级（O/H/A/B/N）
+uv run python scripts/predict.py \
+    --model-path ./outputs/models/test_drive_model \
+    --data-path ./data/final_v4_test.parquet \
+    --output ./predictions.csv \
+    --include-ohab
+
 # 包含原始数据列
 uv run python scripts/predict.py \
     --model-path ./outputs/models/test_drive_model \
     --data-path ./data/final_v4_test.parquet \
     --output ./predictions_full.csv \
-    --include-original
+    --include-original \
+    --include-ohab
 ```
+
+**OHAB 评级说明**：
+- **O 级**：已订车/已成交（检测数据中的成交字段）
+- **H 级**：高意向，计划 7 天内试驾
+- **A 级**：中意向，计划 14 天内试驾
+- **B 级**：低意向，计划 21 天内试驾
+- **N 级**：无意向
 
 ### 监控任务
 

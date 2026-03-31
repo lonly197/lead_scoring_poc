@@ -54,6 +54,13 @@ uv run python scripts/predict.py \
     --data-path ./data/final_v4_test.parquet \
     --output ./predictions.csv
 
+# 预测 + OHAB 评级（O/H/A/B/N）
+uv run python scripts/predict.py \
+    --model-path ./outputs/models/test_drive_model \
+    --data-path ./data/final_v4_test.parquet \
+    --output ./predictions.csv \
+    --include-ohab
+
 # 预测（包含原始数据列）
 uv run python scripts/predict.py \
     --model-path ./outputs/models/test_drive_model \
