@@ -671,6 +671,7 @@ class LeadScoringPredictor:
         self,
         test_data: pd.DataFrame,
         feature_names: Optional[List[str]] = None,
+        fast_mode: bool = True,
     ) -> pd.DataFrame:
         """
         获取特征重要性
@@ -678,6 +679,8 @@ class LeadScoringPredictor:
         Args:
             test_data: 测试数据
             feature_names: 特征名列表（可选）
+            fast_mode: 是否使用快速模式（仅计算原始特征重要性，跳过派生特征）
+                       默认 True，因为派生特征的 permutation importance 计算非常慢
 
         Returns:
             特征重要性 DataFrame
@@ -692,7 +695,17 @@ class LeadScoringPredictor:
             include_label=True,
         )
 
-        importance = self._predictor.feature_importance(aligned_test_data)
+        # 快速模式：只计算原始特征的重要性（跳过派生特征）
+        # 派生特征数量可能是原始特征的 10 倍，permutation 计算非常慢
+        if fast_mode:
+            logger.info("使用快速模式：仅计算原始特征重要性（跳过派生特征）")
+            importance = self._predictor.feature_importance(
+                aligned_test_data,
+                feature_stage='original',  # 只计算原始 52 个特征，跳过 499 个派生特征
+            )
+        else:
+            logger.info("计算完整特征重要性（包含派生特征，可能较慢）")
+            importance = self._predictor.feature_importance(aligned_test_data)
 
         if isinstance(importance, pd.Series):
             importance_df = importance.rename("importance").to_frame().reset_index()
