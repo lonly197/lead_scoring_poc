@@ -98,35 +98,56 @@ uv run python scripts/run.py validate \
 
 ### 预测（纯推理）
 
+支持三种预测模式，对应不同的业务场景：
+
+| 模式 | 描述 | 输入 | 业务匹配度 |
+|------|------|------|-----------|
+| `simple` | 简单模式 | 单模型（14天试驾概率） | 部分 |
+| `medium` | 中等模式 | 试驾三模型集成（7/14/21天） | 完整匹配试驾前阶段 |
+| `advanced` | 高等模式 | 试驾+下订双阶段概率 | 完整匹配全部规则 |
+
 ```bash
-# 基本用法：输出 ID + 预测结果
+# 简单模式（默认）：使用单模型
 uv run python scripts/predict.py \
+    --mode simple \
     --model-path ./outputs/models/test_drive_model \
     --data-path ./data/final_v4_test.parquet \
     --output ./predictions.csv
 
-# 包含 OHAB 评级（O/H/A/B/N）
+# 中等模式：使用试驾三模型集成
 uv run python scripts/predict.py \
-    --model-path ./outputs/models/test_drive_model \
+    --mode medium \
+    --ensemble-path ./outputs/models/test_drive_ensemble \
     --data-path ./data/final_v4_test.parquet \
-    --output ./predictions.csv \
-    --include-ohab
+    --output ./predictions.csv
+
+# 高等模式：双阶段预测（试驾+下订）
+uv run python scripts/predict.py \
+    --mode advanced \
+    --drive-ensemble-path ./outputs/models/test_drive_ensemble \
+    --order-ensemble-path ./outputs/models/order_after_drive_ensemble \
+    --data-path ./data/final_v4_test.parquet \
+    --output ./predictions.csv
 
 # 包含原始数据列
 uv run python scripts/predict.py \
-    --model-path ./outputs/models/test_drive_model \
+    --mode medium \
+    --ensemble-path ./outputs/models/test_drive_ensemble \
     --data-path ./data/final_v4_test.parquet \
     --output ./predictions_full.csv \
-    --include-original \
-    --include-ohab
+    --include-original
 ```
 
 **OHAB 评级说明**：
-- **O 级**：已订车/已成交（检测数据中的成交字段）
-- **H 级**：高意向，计划 7 天内试驾
-- **A 级**：中意向，计划 14 天内试驾
-- **B 级**：低意向，计划 21 天内试驾
+- **O 级**：已订车/已成交（自动检测数据中的成交字段）
+- **H 级**：7天内试驾/下订（高意向）
+- **A 级**：14天内试驾/下订（中意向）
+- **B 级**：21天内试驾/下订（低意向）
 - **N 级**：无意向
+
+**评级阶段**：
+- 试驾前邀约阶段：使用试驾概率模型
+- 试驾后下订商谈阶段：使用下订概率模型（仅 advanced 模式）
 
 ### 监控任务
 

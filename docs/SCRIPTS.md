@@ -262,46 +262,67 @@ uv run python scripts/validate_model.py \
 
 对输入数据进行预测，将预测结果追加到 DataFrame 中返回。与验证脚本不同，predict.py 不要求目标标签存在，专注于纯推理。
 
-**支持 OHAB 评级推导**：根据业务规则，自动推导线索等级：
-- **O 级**：已订车/已成交（检测下订时间、成交标签等字段）
-- **H 级**：高意向，7天内计划试驾
-- **A 级**：中意向，14天内计划试驾
-- **B 级**：低意向，21天内计划试驾
-- **N 级**：无意向
+**支持三种预测模式**：
+
+| 模式 | 描述 | 输入模型 | 业务规则匹配 |
+|------|------|---------|-------------|
+| `simple` | 简单模式 | 单模型（14天试驾概率） | 部分匹配 |
+| `medium` | 中等模式 | 试驾三模型集成（7/14/21天概率） | 完整匹配试驾前阶段 |
+| `advanced` | 高等模式 | 试驾+下订双阶段模型 | 完整匹配全部业务规则 |
+
+**业务规则**：
+- **试驾前邀约阶段**：H 级（7天内试驾）、A 级（14天内试驾）、B 级（21天内试驾）
+- **试驾后下订商谈阶段**：H 级（7天内下订）、A 级（14天内下订）、B 级（21天内下订）
+- **O 级**：已成交（优先级最高，自动检测）
 
 ```bash
-# 基本用法：输出 ID + 预测结果
+# ========== 简单模式（默认）==========
+# 使用单模型（14天试驾概率）推断 OHAB
 uv run python scripts/predict.py \
+    --mode simple \
     --model-path ./outputs/models/test_drive_model \
     --data-path ./data/final_v4_test.parquet \
     --output ./predictions.csv
 
-# 包含 OHAB 评级
+# ========== 中等模式 ==========
+# 使用试驾三模型集成（7/14/21天概率）推断 OHAB
 uv run python scripts/predict.py \
-    --model-path ./outputs/models/test_drive_model \
+    --mode medium \
+    --ensemble-path ./outputs/models/test_drive_ensemble \
     --data-path ./data/final_v4_test.parquet \
-    --output ./predictions.csv \
-    --include-ohab
+    --output ./predictions.csv
+
+# ========== 高等模式 ==========
+# 双阶段预测：已试驾用下订模型，未试驾用试驾模型
+uv run python scripts/predict.py \
+    --mode advanced \
+    --drive-ensemble-path ./outputs/models/test_drive_ensemble \
+    --order-ensemble-path ./outputs/models/order_after_drive_ensemble \
+    --data-path ./data/final_v4_test.parquet \
+    --output ./predictions.csv
 
 # 包含原始数据列
 uv run python scripts/predict.py \
-    --model-path ./outputs/models/test_drive_model \
+    --mode medium \
+    --ensemble-path ./outputs/models/test_drive_ensemble \
     --data-path ./data/final_v4_test.parquet \
     --output ./predictions_full.csv \
-    --include-original \
-    --include-ohab
+    --include-original
 ```
 
 **参数说明**：
 
 | 参数 | 说明 | 默认值 |
 |------|------|--------|
-| `--model-path` | 模型路径（必需） | - |
+| `--mode` | 预测模式（simple/medium/advanced） | simple |
+| `--model-path` | 单模型路径（simple 模式必需） | - |
+| `--ensemble-path` | 试驾集成模型目录（medium 模式必需） | - |
+| `--drive-ensemble-path` | 试驾集成模型目录（advanced 模式必需） | - |
+| `--order-ensemble-path` | 下订集成模型目录（advanced 模式必需） | - |
 | `--data-path` | 数据文件路径（必需） | - |
 | `--output` | 输出文件路径 | 不保存 |
 | `--include-original` | 包含原始数据列 | False |
-| `--include-ohab` | 包含 OHAB 评级 | False |
-| `--ohab-threshold` | OHAB 评级判定阈值 | 0.5 |
+| `--threshold-h/a/b` | H/A/B 级判定阈值 | 0.5 |
 | `--id-column` | ID 列名 | 线索唯一ID |
 
 **O 级检测字段**（优先级最高，任一条件满足即标记为 O 级）：
@@ -318,13 +339,22 @@ uv run python scripts/predict.py \
 | `结算日期` | 不为空 |
 | `订单号`/`customer_order_no` | 不为空 |
 
+**已试驾检测字段**：
+
+| 字段 | 检测条件 |
+|------|----------|
+| `试驾时间` | 不为空 |
+| `试驾状态` | 包含"已试驾"/"试驾完成"等关键词 |
+
 **输出格式**：
 
-| 模式 | 列数 | 内容 |
-|------|------|------|
-| 默认 | 3 列 | `线索唯一ID`, `预测概率`, `预测标签` |
-| `--include-ohab` | 4 列 | 增加 `OHAB评级` |
-| `--include-original` | 完整列 | 原始数据 + 预处理列 + 预测结果 |
+| 列名 | 说明 |
+|------|------|
+| `线索唯一ID` | 线索标识 |
+| `OHAB评级` | O/H/A/B/N |
+| `评级阶段` | O / 试驾前 / 试驾后 |
+| `试驾概率_7天/14天/21天` | 各时间窗口试驾概率 |
+| `下订概率_7天/14天/21天` | 各时间窗口下订概率（仅 advanced） |
 
 ---
 
