@@ -313,6 +313,16 @@ train_df, valid_df, test_df, metadata = split_data_oot_three_way_duckdb(
 
 详见 `docs/TRAINING.md` 的数据集分析部分。
 
+## 项目约定
+
+### 数据处理优化
+- **DuckDB 优先**：管道脚本优先使用 DuckDB SQL 向量化处理，避免 pandas 全量加载
+- **Pipeline 一致**：所有 step 子脚本使用相同的优化逻辑和错误处理模式
+
+### 文档规范
+- **简洁一致**：文档描述简洁，与代码实现保持同步
+- **CHANGELOG.md**：仅记录关键变更节点，供 agent 理解项目上下文
+
 ## 故障排查
 
 ```bash
