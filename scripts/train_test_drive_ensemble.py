@@ -278,9 +278,9 @@ def train_single_model(
         excluded_model_types=excluded_model_types,
         num_folds_parallel=args.num_folds_parallel,
         included_model_types=included_model_types,
-        # Bagging/Stacking 参数
-        num_bag_folds=getattr(args, "num_bag_folds", None),
-        num_stack_levels=getattr(args, "num_stack_levels", None),
+        # Bagging/Stacking 参数：命令行 > config.model > None
+        num_bag_folds=args.num_bag_folds if args.num_bag_folds is not None else config.model.num_bag_folds,
+        num_stack_levels=args.num_stack_levels if args.num_stack_levels is not None else config.model.num_stack_levels,
         dynamic_stacking=getattr(args, "dynamic_stacking", None),
     )
 
@@ -416,9 +416,9 @@ def train_single_model_spawn(
         excluded_model_types=excluded_model_types,
         num_folds_parallel=getattr(args, "num_folds_parallel", None),
         included_model_types=included_model_types,
-        # Bagging/Stacking 参数
-        num_bag_folds=getattr(args, "num_bag_folds", None),
-        num_stack_levels=getattr(args, "num_stack_levels", None),
+        # Bagging/Stacking 参数：命令行 > config.model > None
+        num_bag_folds=args.num_bag_folds if args.num_bag_folds is not None else config.model.num_bag_folds,
+        num_stack_levels=args.num_stack_levels if args.num_stack_levels is not None else config.model.num_stack_levels,
         dynamic_stacking=getattr(args, "dynamic_stacking", None),
     )
 
