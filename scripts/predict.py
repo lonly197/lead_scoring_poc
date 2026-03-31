@@ -68,7 +68,10 @@ def detect_ordered_status(df: pd.DataFrame) -> np.ndarray:
     - 下订时间不为空
     - 成交标签 = 1
     - is_final_ordered = 1
-    - 下定状态 = 已下定/已成交等
+    - 下定状态/订单状态包含已下定/已成交关键词
+    - 意向金支付状态为已支付
+    - 成交日期/结算日期不为空
+    - 订单号不为空
 
     Args:
         df: 输入数据 DataFrame
@@ -78,7 +81,7 @@ def detect_ordered_status(df: pd.DataFrame) -> np.ndarray:
     """
     is_ordered = np.zeros(len(df), dtype=bool)
 
-    # 1. 检查下订时间
+    # 1. 检查下订时间（时间字段，有值表示已下订）
     if "下订时间" in df.columns:
         is_ordered |= df["下订时间"].notna()
 
@@ -92,15 +95,34 @@ def detect_ordered_status(df: pd.DataFrame) -> np.ndarray:
 
     # 4. 检查下定状态
     if "下定状态" in df.columns:
-        ordered_keywords = ["已下定", "已成交", "已订车", "成交", "订车"]
+        ordered_keywords = ["已下定", "已成交", "已订车", "成交", "订车", "已下单"]
         for kw in ordered_keywords:
             is_ordered |= df["下定状态"].astype(str).str.contains(kw, na=False)
 
     # 5. 检查订单状态
     if "订单状态" in df.columns:
-        ordered_keywords = ["已下定", "已成交", "已订车", "成交", "订车", "已完成"]
+        ordered_keywords = ["已下定", "已成交", "已订车", "成交", "订车", "已完成", "已下单"]
         for kw in ordered_keywords:
             is_ordered |= df["订单状态"].astype(str).str.contains(kw, na=False)
+
+    # 6. 检查意向金支付状态
+    if "意向金支付状态" in df.columns:
+        paid_keywords = ["已支付", "已付", "支付成功"]
+        for kw in paid_keywords:
+            is_ordered |= df["意向金支付状态"].astype(str).str.contains(kw, na=False)
+
+    # 7. 检查成交日期
+    if "成交日期" in df.columns:
+        is_ordered |= df["成交日期"].notna()
+
+    # 8. 检查结算日期
+    if "结算日期" in df.columns:
+        is_ordered |= df["结算日期"].notna()
+
+    # 9. 检查订单号（有订单号表示已下单）
+    for col in ["订单号", "customer_order_no"]:
+        if col in df.columns:
+            is_ordered |= df[col].notna()
 
     return is_ordered
 
