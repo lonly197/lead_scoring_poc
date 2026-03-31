@@ -86,27 +86,14 @@ def split_random_duckdb(
         total_rows = con.execute("SELECT COUNT(*) FROM source").fetchone()[0]
         test_size = int(total_rows * test_ratio)
 
-        # 使用 SAMPLE 进行采样（比 ORDER BY RANDOM() 更快）
-        con.execute(f"""
-            CREATE OR REPLACE VIEW test_data AS
-            SELECT * FROM source USING SAMPLE {test_ratio * 100}% (bernoulli, {random_seed})
-        """)
-        con.execute(f"""
-            CREATE OR REPLACE VIEW train_data AS
-            SELECT s.* FROM source s
-            LEFT JOIN test_data t ON s.rowid = t.rowid
-            WHERE t.rowid IS NULL
-        """)
+        # 设置随机种子
+        con.execute(f"SET seed = {random_seed}")
 
-        # 注意：DuckDB 的 SAMPLE bernoulli 是近似的，用 WHERE NOT IN 更准确
-        con.execute(f"DROP VIEW IF EXISTS test_data")
-        con.execute(f"DROP VIEW IF EXISTS train_data")
-
-        # 更精确的方法：使用 rowid 和哈希
+        # 使用 RANDOM() 进行随机拆分
         con.execute(f"""
             CREATE OR REPLACE VIEW split_view AS
             SELECT *,
-                   CASE WHEN murmur_hash(rowid) % 100 < {test_ratio * 100} THEN 'test' ELSE 'train' END as _split
+                   CASE WHEN RANDOM() < {test_ratio} THEN 'test' ELSE 'train' END as _split
             FROM source
         """)
 
@@ -130,11 +117,14 @@ def split_random_duckdb(
         unique_values = con.execute(f'SELECT DISTINCT "{target_column}" FROM source WHERE "{target_column}" IS NOT NULL').fetchall()
         unique_values = [v[0] for v in unique_values]
 
-        # 使用 ROW_NUMBER 和 HASH 进行分层采样
+        # 使用 ROW_NUMBER 和 RANDOM 进行分层采样
+        # 设置随机种子以保证可重复性（DuckDB 不支持，保留参数供日志使用）
+        # con.execute(f"SET seed = {random_seed}")
+
         con.execute(f"""
             CREATE OR REPLACE VIEW split_view AS
             SELECT *,
-                   ROW_NUMBER() OVER (PARTITION BY "{target_column}" ORDER BY murmur_hash(rowid)) as _row_num,
+                   ROW_NUMBER() OVER (PARTITION BY "{target_column}" ORDER BY RANDOM()) as _row_num,
                    COUNT(*) OVER (PARTITION BY "{target_column}") as _total_in_group
             FROM source
             WHERE "{target_column}" IS NOT NULL
