@@ -21,7 +21,7 @@ import json
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 # 添加项目根目录
 project_root = Path(__file__).parent.parent.parent
@@ -70,7 +70,7 @@ class DataCleaner:
 
     def clean(
         self,
-        df: "pl.DataFrame",
+        df: Union["pl.DataFrame", "pl.LazyFrame"],
         drop_high_missing: bool = True,
         drop_duplicates: bool = True,
         drop_constant: bool = True,
@@ -81,7 +81,7 @@ class DataCleaner:
         执行数据清洗
 
         Args:
-            df: 输入 DataFrame
+            df: 输入 DataFrame 或 LazyFrame
             drop_high_missing: 是否删除高缺失列
             drop_duplicates: 是否删除重复行
             drop_constant: 是否删除常量列
@@ -92,6 +92,10 @@ class DataCleaner:
             清洗后的 DataFrame
         """
         import polars as pl
+
+        # 如果是 LazyFrame，先 collect
+        if isinstance(df, pl.LazyFrame):
+            df = df.collect()
 
         original_rows = len(df)
         original_cols = len(df.columns)
@@ -507,12 +511,26 @@ def main() -> int:
         default=100,
         help="高基数阈值（默认: 100）"
     )
+    parser.add_argument(
+        "--lazy",
+        action="store_true",
+        help="使用惰性模式加载（大文件推荐）"
+    )
+    parser.add_argument(
+        "--columns",
+        type=str,
+        default=None,
+        help="仅加载指定列（逗号分隔，用于列裁剪）"
+    )
 
     args = parser.parse_args()
 
     input_path = Path(args.input)
     output_path = Path(args.output)
     report_path = Path(args.report) if args.report else None
+
+    # 解析列裁剪参数
+    columns = args.columns.split(",") if args.columns else None
 
     # 检查输入文件
     if not input_path.exists():
@@ -528,8 +546,15 @@ def main() -> int:
 
         # 加载数据
         print_step("加载数据", "running", str(input_path))
-        df = load_data(input_path, engine="polars")
-        print_step("加载数据", "success", f"{len(df):,} 行, {len(df.columns)} 列")
+        df = load_data(input_path, engine="polars", lazy=args.lazy, columns=columns)
+
+        # 如果是 LazyFrame，需要 collect 获取行数
+        if args.lazy:
+            n_rows = df.select(pl.len()).collect().item()
+            n_cols = len(df.collect_schema())
+            print_step("加载数据", "success", f"{n_rows:,} 行, {n_cols} 列 (惰性模式)")
+        else:
+            print_step("加载数据", "success", f"{len(df):,} 行, {len(df.columns)} 列")
 
         # 创建清洗器
         cleaner = DataCleaner(
