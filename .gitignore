@@ -52,6 +52,11 @@ outputs/
 reports/
 !reports/.gitkeep
 
+# Agent execution plans
+docs/plan/
+docs/plans/
+*.plan.md
+
 # Temporary files
 *.tmp
 *.temp
