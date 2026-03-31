@@ -88,6 +88,8 @@ class LeadScoringPredictor:
         num_bag_folds: Optional[int] = None,
         num_stack_levels: Optional[int] = None,
         dynamic_stacking: Optional[bool] = None,
+        # 集成模型控制
+        fit_weighted_ensemble: Optional[bool] = None,
     ):
         """
         初始化预测器
@@ -114,9 +116,13 @@ class LeadScoringPredictor:
                 - ['GBM']: 只训练 LightGBM
                 - ['XGB']: 只训练 XGBoost
                 - ['CAT', 'GBM']: 训练 CatBoost 和 LightGBM
+                - 也接受逗号分隔的字符串（如 "CAT,GBM"）
             num_bag_folds: Bagging folds 数量（None=使用预设默认值，1=禁用 bagging）
             num_stack_levels: Stacking 层数（None=使用预设默认值，0=禁用 stacking）
             dynamic_stacking: 是否启用动态堆叠检测（None=使用预设默认值）
+            fit_weighted_ensemble: 是否训练加权集成模型（None=AutoGluon 默认行为）
+                - True: 训练 WeightedEnsemble_L2（默认）
+                - False: 禁用集成模型，仅训练指定的基础模型
         """
         self.label = label
         self.output_path = Path(output_path)
@@ -134,6 +140,8 @@ class LeadScoringPredictor:
         self.num_bag_folds = num_bag_folds
         self.num_stack_levels = num_stack_levels
         self.dynamic_stacking = dynamic_stacking
+        # 集成模型控制
+        self.fit_weighted_ensemble = fit_weighted_ensemble
 
         self._predictor = None
         self._feature_metadata = None
@@ -366,9 +374,15 @@ class LeadScoringPredictor:
 
         # 指定训练的模型类型（白名单模式）
         if self.included_model_types:
-            hyperparameters = {model_type: {} for model_type in self.included_model_types}
+            # 处理字符串输入（兼容命令行参数传递）
+            if isinstance(self.included_model_types, str):
+                included_list = [t.strip() for t in self.included_model_types.split(",")]
+            else:
+                included_list = list(self.included_model_types)
+
+            hyperparameters = {model_type: {} for model_type in included_list}
             fit_kwargs["hyperparameters"] = hyperparameters
-            logger.info(f"指定训练模型类型: {self.included_model_types}")
+            logger.info(f"指定训练模型类型: {included_list}")
 
         # 限制并行 fold 数量
         if self.num_folds_parallel is not None:
@@ -389,6 +403,11 @@ class LeadScoringPredictor:
         if self.dynamic_stacking is not None:
             fit_kwargs["dynamic_stacking"] = self.dynamic_stacking
             logger.info(f"动态堆叠检测: {self.dynamic_stacking}")
+
+        # 集成模型控制
+        if self.fit_weighted_ensemble is not None:
+            fit_kwargs["fit_weighted_ensemble"] = self.fit_weighted_ensemble
+            logger.info(f"训练加权集成模型: {self.fit_weighted_ensemble}")
 
         for dataset_name, include_label in (
             ("tuning_data", True),
