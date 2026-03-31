@@ -184,6 +184,15 @@ def detect_data_format(file_path: str) -> DataFormatConfig:
     Returns:
         数据格式配置
     """
+    # 优先检测 Parquet 格式（二进制文件，不能用文本方式读取）
+    if file_path.lower().endswith('.parquet'):
+        # Parquet 文件自带表头和类型信息
+        return DataFormatConfig(
+            sep=None,  # Parquet 无分隔符概念
+            header=0,  # 有表头
+            column_names=[]  # 从文件读取
+        )
+
     with open(file_path, 'r', encoding='utf-8') as f:
         first_line = f.readline()
 
@@ -316,50 +325,54 @@ def load_and_adapt_data(
     if format_config is None:
         format_config = detect_data_format(file_path)
 
-    # 构建读取参数
-    read_params = {
-        "sep": format_config.sep,
-        "header": format_config.header,
-        "names": format_config.column_names if format_config.header is None else None,
-    }
-
-    # 新格式（无表头）需要特殊处理
-    if format_config.header is None:
-        # 先读取第一行检测实际列数
-        # 注意：不能用strip()，否则会删除末尾的空制表符导致列数计算错误
-        with open(file_path, 'r', encoding='utf-8') as f:
-            first_line = f.readline()
-        actual_columns = len(first_line.split(format_config.sep))
-
-        defined_columns = len(format_config.column_names)
-
-        if actual_columns != defined_columns:
-            # 列数不匹配时，扩展或截断列名
-            if actual_columns > defined_columns:
-                # 扩展列名：为额外列添加占位名称
-                extra_names = [f"_未命名列_{i}" for i in range(actual_columns - defined_columns)]
-                read_params["names"] = format_config.column_names + extra_names
-                print(f"警告: 数据列数({actual_columns})多于定义列数({defined_columns})，已添加占位列名")
-            else:
-                # 截断列名
-                read_params["names"] = format_config.column_names[:actual_columns]
-                print(f"警告: 数据列数({actual_columns})少于定义列数({defined_columns})，已截断列名")
-
-        read_params["low_memory"] = False
+    # Parquet 格式：直接读取，自带表头和类型信息
+    if file_path.lower().endswith('.parquet'):
+        df = pd.read_parquet(file_path)
     else:
-        read_params["low_memory"] = False
+        # CSV/TSV 格式：构建读取参数
+        read_params = {
+            "sep": format_config.sep,
+            "header": format_config.header,
+            "names": format_config.column_names if format_config.header is None else None,
+        }
 
-    # 加载数据
-    try:
-        df = pd.read_csv(file_path, **read_params)
-    except Exception:
+        # 新格式（无表头）需要特殊处理
         if format_config.header is None:
-            fallback_params = dict(read_params)
-            fallback_params["engine"] = "python"
-            fallback_params["on_bad_lines"] = "skip"
-            df = pd.read_csv(file_path, **fallback_params)
+            # 先读取第一行检测实际列数
+            # 注意：不能用strip()，否则会删除末尾的空制表符导致列数计算错误
+            with open(file_path, 'r', encoding='utf-8') as f:
+                first_line = f.readline()
+            actual_columns = len(first_line.split(format_config.sep))
+
+            defined_columns = len(format_config.column_names)
+
+            if actual_columns != defined_columns:
+                # 列数不匹配时，扩展或截断列名
+                if actual_columns > defined_columns:
+                    # 扩展列名：为额外列添加占位名称
+                    extra_names = [f"_未命名列_{i}" for i in range(actual_columns - defined_columns)]
+                    read_params["names"] = format_config.column_names + extra_names
+                    print(f"警告: 数据列数({actual_columns})多于定义列数({defined_columns})，已添加占位列名")
+                else:
+                    # 截断列名
+                    read_params["names"] = format_config.column_names[:actual_columns]
+                    print(f"警告: 数据列数({actual_columns})少于定义列数({defined_columns})，已截断列名")
+
+            read_params["low_memory"] = False
         else:
-            raise
+            read_params["low_memory"] = False
+
+        # 加载数据
+        try:
+            df = pd.read_csv(file_path, **read_params)
+        except Exception:
+            if format_config.header is None:
+                fallback_params = dict(read_params)
+                fallback_params["engine"] = "python"
+                fallback_params["on_bad_lines"] = "skip"
+                df = pd.read_csv(file_path, **fallback_params)
+            else:
+                raise
 
     # 验证关键列是否存在
     required_columns = ["线索创建时间", "线索唯一ID"]
