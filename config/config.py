@@ -111,6 +111,18 @@ class ModelConfig:
         default_factory=lambda: os.getenv("MODEL_INCLUDED_TYPES", "")
     )
 
+    # Bagging folds 数量（None=使用预设默认值，1=禁用 bagging）
+    # 空字符串表示 None（使用 preset 默认）
+    num_bag_folds: int | None = field(
+        default_factory=lambda: _optional_env_int("MODEL_NUM_BAG_FOLDS")
+    )
+
+    # Stacking 层数（None=使用预设默认值，0=禁用 stacking）
+    # 空字符串表示 None（使用 preset 默认）
+    num_stack_levels: int | None = field(
+        default_factory=lambda: _optional_env_int("MODEL_NUM_STACK_LEVELS")
+    )
+
 
 @dataclass
 class OHABConfig:

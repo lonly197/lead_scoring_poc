@@ -322,8 +322,9 @@ def main():
             excluded_model_types=excluded_model_types,
             num_folds_parallel=args.num_folds_parallel,
             included_model_types=included_model_types,
-            num_bag_folds=args.num_bag_folds,
-            num_stack_levels=args.num_stack_levels,
+            # 优先使用命令行参数，其次使用 config 默认值
+            num_bag_folds=args.num_bag_folds if args.num_bag_folds is not None else config.model.num_bag_folds,
+            num_stack_levels=args.num_stack_levels if args.num_stack_levels is not None else config.model.num_stack_levels,
         )
         logger.info("启用类别权重自动平衡 (sample_weight='balance_weight')")
 
