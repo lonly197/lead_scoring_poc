@@ -96,6 +96,23 @@ uv run python scripts/run.py validate \
     --test-path ./data/test.parquet
 ```
 
+### 预测（纯推理）
+
+```bash
+# 基本用法：输出 ID + 预测结果
+uv run python scripts/predict.py \
+    --model-path ./outputs/models/test_drive_model \
+    --data-path ./data/final_v4_test.parquet \
+    --output ./predictions.csv
+
+# 包含原始数据列
+uv run python scripts/predict.py \
+    --model-path ./outputs/models/test_drive_model \
+    --data-path ./data/final_v4_test.parquet \
+    --output ./predictions_full.csv \
+    --include-original
+```
+
 ### 监控任务
 
 ```bash

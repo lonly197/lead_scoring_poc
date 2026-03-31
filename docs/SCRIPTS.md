@@ -256,6 +256,46 @@ uv run python scripts/validate_model.py \
 
 ---
 
+## 预测脚本
+
+### predict.py - 模型预测
+
+对输入数据进行预测，将预测结果追加到 DataFrame 中返回。与验证脚本不同，predict.py 不要求目标标签存在，专注于纯推理。
+
+```bash
+# 基本用法：输出 ID + 预测结果
+uv run python scripts/predict.py \
+    --model-path ./outputs/models/test_drive_model \
+    --data-path ./data/final_v4_test.parquet \
+    --output ./predictions.csv
+
+# 包含原始数据列
+uv run python scripts/predict.py \
+    --model-path ./outputs/models/test_drive_model \
+    --data-path ./data/final_v4_test.parquet \
+    --output ./predictions_full.csv \
+    --include-original
+```
+
+**参数说明**：
+
+| 参数 | 说明 | 默认值 |
+|------|------|--------|
+| `--model-path` | 模型路径（必需） | - |
+| `--data-path` | 数据文件路径（必需） | - |
+| `--output` | 输出文件路径 | 不保存 |
+| `--include-original` | 包含原始数据列 | False |
+| `--id-column` | ID 列名 | 线索唯一ID |
+
+**输出格式**：
+
+| 模式 | 列数 | 内容 |
+|------|------|------|
+| 默认 | 3 列 | `线索唯一ID`, `预测概率`, `预测标签` |
+| `--include-original` | 完整列 | 原始数据 + 预处理列 + 预测结果 |
+
+---
+
 ## 其他脚本
 
 ### diagnose_data.py - 数据诊断
@@ -321,6 +361,11 @@ uv run python scripts/generate_topk.py \
 │  验证入口                                                    │
 │  run.py → validate_model.py → validate_*.py                 │
 └─────────────────────────────────────────────────────────────┘
+                    ↓
+┌─────────────────────────────────────────────────────────────┐
+│  预测入口                                                    │
+│  predict.py（纯推理，无需标签）                               │
+└─────────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -329,6 +374,7 @@ uv run python scripts/generate_topk.py \
 
 | 日期 | 新增脚本 | 说明 |
 |------|----------|------|
+| 2026-03-31 | `predict.py` | 模型预测脚本（纯推理，无需标签） |
 | 2026-03-31 | `excel_to_csv.py` | Excel→CSV 快速转换 |
 | 2026-03-31 | `excel_to_parquet.py` | Excel→Parquet 流式处理 |
 | 2026-03-31 | `merge_parquet.py` | Parquet 合并（DuckDB） |

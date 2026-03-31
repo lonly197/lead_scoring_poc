@@ -48,6 +48,19 @@ uv run python scripts/run.py train ensemble --daemon --parallel
 uv run python scripts/run.py validate \
     --model-path ./outputs/models/test_drive_model
 
+# 预测（纯推理，无需标签）
+uv run python scripts/predict.py \
+    --model-path ./outputs/models/test_drive_model \
+    --data-path ./data/final_v4_test.parquet \
+    --output ./predictions.csv
+
+# 预测（包含原始数据列）
+uv run python scripts/predict.py \
+    --model-path ./outputs/models/test_drive_model \
+    --data-path ./data/final_v4_test.parquet \
+    --output ./predictions_full.csv \
+    --include-original
+
 # 监控任务
 uv run python scripts/run.py monitor status
 uv run python scripts/run.py monitor log train_test_drive -f
@@ -297,6 +310,7 @@ train_df, valid_df, test_df, metadata = split_data_oot_three_way_duckdb(
 | `scripts/run.py` | 一级入口：统一调度器 |
 | `scripts/train_model.py` | 二级入口：训练路由器 |
 | `scripts/validate_model.py` | 二级入口：验证路由器 |
+| `scripts/predict.py` | 模型预测：纯推理，无需标签 |
 | `scripts/convert_to_parquet.py` | 数据格式转换：CSV/TSV → Parquet |
 | `scripts/merge_data.py` | 数据合并：线索宽表 + DMP 行为 |
 | `config/config.py` | 配置管理：ID 列、泄漏字段、特征定义 |
