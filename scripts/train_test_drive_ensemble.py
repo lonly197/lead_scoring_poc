@@ -10,18 +10,26 @@
         --preset high_quality
 """
 
+# === Ray 配置（必须在导入 Ray 之前设置）===
+import os
+from pathlib import Path
+
+# 设置 Ray 临时目录（避免使用 /tmp 导致磁盘空间警告）
+_project_root = Path(__file__).parent.parent
+_ray_temp_dir = os.getenv("RAY_TEMP_DIR", str(_project_root / ".ray_tmp"))
+os.environ["RAY_TEMP_DIR"] = _ray_temp_dir
+Path(_ray_temp_dir).mkdir(parents=True, exist_ok=True)
+
 import argparse
 import atexit
 import json
 import logging
 import multiprocessing as mp
-import os
 import shutil
 import sys
 import tempfile
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime
-from pathlib import Path
 
 # 添加项目根目录到路径
 project_root = Path(__file__).parent.parent
@@ -153,6 +161,24 @@ def parse_args():
         default=3,
         help="并行训练的最大进程数（默认 3）",
     )
+    parser.add_argument(
+        "--num-bag-folds",
+        type=int,
+        default=None,
+        help="Bagging folds 数量（None=使用预设默认值，1=禁用 bagging）",
+    )
+    parser.add_argument(
+        "--num-stack-levels",
+        type=int,
+        default=None,
+        help="Stacking 层数（None=使用预设默认值，0=禁用 stacking）",
+    )
+    parser.add_argument(
+        "--dynamic-stacking",
+        type=lambda x: x.lower() in ["true", "1", "yes"] if isinstance(x, str) else bool(x),
+        default=None,
+        help="是否启用动态堆叠检测（None=使用预设默认值）",
+    )
 
     return parser.parse_args()
 
@@ -205,6 +231,10 @@ def train_single_model(
         excluded_model_types=excluded_model_types,
         num_folds_parallel=args.num_folds_parallel,
         included_model_types=included_model_types,
+        # Bagging/Stacking 参数
+        num_bag_folds=getattr(args, "num_bag_folds", None),
+        num_stack_levels=getattr(args, "num_stack_levels", None),
+        dynamic_stacking=getattr(args, "dynamic_stacking", None),
     )
 
     predictor.train(
@@ -339,6 +369,10 @@ def train_single_model_spawn(
         excluded_model_types=excluded_model_types,
         num_folds_parallel=getattr(args, "num_folds_parallel", None),
         included_model_types=included_model_types,
+        # Bagging/Stacking 参数
+        num_bag_folds=getattr(args, "num_bag_folds", None),
+        num_stack_levels=getattr(args, "num_stack_levels", None),
+        dynamic_stacking=getattr(args, "dynamic_stacking", None),
     )
 
     predictor.train(
@@ -403,6 +437,10 @@ def train_models_parallel(
         "exclude_memory_heavy_models": getattr(args, "exclude_memory_heavy_models", False),
         "num_folds_parallel": getattr(args, "num_folds_parallel", None),
         "included_model_types": args.included_model_types,
+        # Bagging/Stacking 参数
+        "num_bag_folds": getattr(args, "num_bag_folds", None),
+        "num_stack_levels": getattr(args, "num_stack_levels", None),
+        "dynamic_stacking": getattr(args, "dynamic_stacking", None),
     }
 
     task_args = [

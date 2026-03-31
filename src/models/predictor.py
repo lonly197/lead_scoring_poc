@@ -84,6 +84,10 @@ class LeadScoringPredictor:
         num_folds_parallel: Optional[int] = None,
         # 模型选择参数
         included_model_types: Optional[List[str]] = None,
+        # Bagging/Stacking 参数
+        num_bag_folds: Optional[int] = None,
+        num_stack_levels: Optional[int] = None,
+        dynamic_stacking: Optional[bool] = None,
     ):
         """
         初始化预测器
@@ -110,6 +114,9 @@ class LeadScoringPredictor:
                 - ['GBM']: 只训练 LightGBM
                 - ['XGB']: 只训练 XGBoost
                 - ['CAT', 'GBM']: 训练 CatBoost 和 LightGBM
+            num_bag_folds: Bagging folds 数量（None=使用预设默认值，1=禁用 bagging）
+            num_stack_levels: Stacking 层数（None=使用预设默认值，0=禁用 stacking）
+            dynamic_stacking: 是否启用动态堆叠检测（None=使用预设默认值）
         """
         self.label = label
         self.output_path = Path(output_path)
@@ -123,6 +130,10 @@ class LeadScoringPredictor:
         self.excluded_model_types = excluded_model_types
         self.num_folds_parallel = num_folds_parallel
         self.included_model_types = included_model_types
+        # Bagging/Stacking 参数
+        self.num_bag_folds = num_bag_folds
+        self.num_stack_levels = num_stack_levels
+        self.dynamic_stacking = dynamic_stacking
 
         self._predictor = None
         self._feature_metadata = None
@@ -365,6 +376,19 @@ class LeadScoringPredictor:
             ag_args_ensemble["num_folds_parallel"] = self.num_folds_parallel
             fit_kwargs["ag_args_ensemble"] = ag_args_ensemble
             logger.info(f"并行 fold 数量限制: {self.num_folds_parallel}")
+
+        # Bagging/Stacking 参数
+        if self.num_bag_folds is not None:
+            fit_kwargs["num_bag_folds"] = self.num_bag_folds
+            logger.info(f"Bagging folds 数量: {self.num_bag_folds}")
+
+        if self.num_stack_levels is not None:
+            fit_kwargs["num_stack_levels"] = self.num_stack_levels
+            logger.info(f"Stacking 层数: {self.num_stack_levels}")
+
+        if self.dynamic_stacking is not None:
+            fit_kwargs["dynamic_stacking"] = self.dynamic_stacking
+            logger.info(f"动态堆叠检测: {self.dynamic_stacking}")
 
         for dataset_name, include_label in (
             ("tuning_data", True),
