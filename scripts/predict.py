@@ -5,27 +5,33 @@
 对输入数据进行预测，将预测结果追加到 DataFrame 中返回。
 支持 OHAB 评级推导：O 级（已成交）/ H 级 / A 级 / B 级 / N 级。
 
+三种预测模式：
+- simple: 简单模式，使用单模型（14天试驾概率）推断 OHAB
+- medium: 中等模式，使用三模型集成（7/14/21天试驾概率）推断 OHAB
+- advanced: 高等模式，分阶段预测（试驾前+试驾后），完全符合业务规则
+
 使用方法：
-    # 基本用法
-    uv run python scripts/predict.py \
-        --model-path ./outputs/models/test_drive_model \
-        --data-path ./data/final_v4_test.parquet \
-        --output ./predictions.csv
-
-    # 包含 OHAB 评级
+    # 简单模式（默认）
     uv run python scripts/predict.py \
         --model-path ./outputs/models/test_drive_model \
         --data-path ./data/final_v4_test.parquet \
         --output ./predictions.csv \
-        --include-ohab
+        --mode simple
 
-    # 返回完整 DataFrame（含原始列 + 预测列）
+    # 中等模式
     uv run python scripts/predict.py \
-        --model-path ./outputs/models/test_drive_model \
+        --ensemble-path ./outputs/models/test_drive_ensemble \
         --data-path ./data/final_v4_test.parquet \
         --output ./predictions.csv \
-        --include-original \
-        --include-ohab
+        --mode medium
+
+    # 高等模式
+    uv run python scripts/predict.py \
+        --drive-ensemble-path ./outputs/models/test_drive_ensemble \
+        --order-ensemble-path ./outputs/models/order_after_drive_ensemble \
+        --data-path ./data/final_v4_test.parquet \
+        --output ./predictions.csv \
+        --mode advanced
 """
 
 from __future__ import annotations
@@ -35,7 +41,7 @@ import json
 import logging
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import Dict, List, Optional
 
 import numpy as np
 import pandas as pd
@@ -47,6 +53,7 @@ sys.path.insert(0, str(project_root))
 from config.config import get_excluded_columns
 from src.data.loader import DataLoader, FeatureEngineer
 from src.models.predictor import LeadScoringPredictor
+from src.models.ohab_rater import OHABRater, PredictionMode
 
 logger = logging.getLogger(__name__)
 
@@ -60,174 +67,61 @@ def load_feature_metadata(model_path: Path) -> dict:
     return {}
 
 
-def detect_ordered_status(df: pd.DataFrame) -> np.ndarray:
-    """
-    检测已成交状态（O 级）
+def load_ensemble_metadata(ensemble_path: Path) -> dict:
+    """加载集成模型元数据"""
+    metadata_path = ensemble_path / "ensemble_metadata.json"
+    if metadata_path.exists():
+        with open(metadata_path, encoding="utf-8") as f:
+            return json.load(f)
+    return {}
 
-    根据以下字段判断线索是否已下定/成交：
-    - 下订时间不为空
-    - 成交标签 = 1
-    - is_final_ordered = 1
-    - 下定状态/订单状态包含已下定/已成交关键词
-    - 意向金支付状态为已支付
-    - 成交日期/结算日期不为空
-    - 订单号不为空
+
+def load_ensemble_models(
+    ensemble_path: Path,
+    time_windows: List[str] = ["7天", "14天", "21天"],
+    label_prefix: str = "试驾标签",
+) -> Dict[str, LeadScoringPredictor]:
+    """
+    加载集成模型的所有子模型
 
     Args:
-        df: 输入数据 DataFrame
+        ensemble_path: 集成模型目录
+        time_windows: 时间窗口列表
+        label_prefix: 标签前缀（"试驾标签" 或 "下订标签"）
 
     Returns:
-        布尔数组，True 表示已成交
+        {标签名: Predictor} 字典
     """
-    is_ordered = np.zeros(len(df), dtype=bool)
-
-    # 1. 检查下订时间（时间字段，有值表示已下订）
-    if "下订时间" in df.columns:
-        is_ordered |= df["下订时间"].notna()
-
-    # 2. 检查成交标签
-    if "成交标签" in df.columns:
-        is_ordered |= (df["成交标签"] == 1)
-
-    # 3. 检查 is_final_ordered
-    if "is_final_ordered" in df.columns:
-        is_ordered |= (df["is_final_ordered"] == 1)
-
-    # 4. 检查下定状态
-    if "下定状态" in df.columns:
-        ordered_keywords = ["已下定", "已成交", "已订车", "成交", "订车", "已下单"]
-        for kw in ordered_keywords:
-            is_ordered |= df["下定状态"].astype(str).str.contains(kw, na=False)
-
-    # 5. 检查订单状态
-    if "订单状态" in df.columns:
-        ordered_keywords = ["已下定", "已成交", "已订车", "成交", "订车", "已完成", "已下单"]
-        for kw in ordered_keywords:
-            is_ordered |= df["订单状态"].astype(str).str.contains(kw, na=False)
-
-    # 6. 检查意向金支付状态
-    if "意向金支付状态" in df.columns:
-        paid_keywords = ["已支付", "已付", "支付成功"]
-        for kw in paid_keywords:
-            is_ordered |= df["意向金支付状态"].astype(str).str.contains(kw, na=False)
-
-    # 7. 检查成交日期
-    if "成交日期" in df.columns:
-        is_ordered |= df["成交日期"].notna()
-
-    # 8. 检查结算日期
-    if "结算日期" in df.columns:
-        is_ordered |= df["结算日期"].notna()
-
-    # 9. 检查订单号（有订单号表示已下单）
-    for col in ["订单号", "customer_order_no"]:
-        if col in df.columns:
-            is_ordered |= df[col].notna()
-
-    return is_ordered
+    models = {}
+    for window in time_windows:
+        label = f"{label_prefix}_{window}"
+        model_path = ensemble_path / label
+        if model_path.exists():
+            logger.info(f"加载模型: {label}")
+            models[label] = LeadScoringPredictor.load(str(model_path))
+        else:
+            logger.warning(f"模型不存在: {model_path}")
+    return models
 
 
-def derive_ohab_rating(
-    y_proba: np.ndarray,
-    is_ordered: np.ndarray,
-    threshold: float = 0.5,
-) -> np.ndarray:
-    """
-    推导 OHAB 评级
-
-    业务规则（来自《O/H/A/B定级业务规则》）：
-    - O 级：已订车、已成交
-    - H 级：客户计划 7 天内试驾
-    - A 级：客户计划 14 天内试驾
-    - B 级：客户计划 21 天内试驾
-    - N 级：无意向
-
-    推导逻辑（基于 14 天试驾概率）：
-    - O 级：已成交状态（优先级最高）
-    - H 级：P(14天试驾) >= threshold 且预测标签 = 1（高置信度正例）
-    - A 级：P(14天试驾) >= threshold（中等置信度）
-    - B 级：threshold/2 <= P(14天试驾) < threshold（低置信度）
-    - N 级：P(14天试驾) < threshold/2（无意向）
-
-    Args:
-        y_proba: 预测概率数组（14 天试驾概率）
-        is_ordered: 已成交状态数组
-        threshold: 评级判定阈值
-
-    Returns:
-        OHAB 评级数组
-    """
-    ratings = np.full(len(y_proba), "N", dtype=object)
-
-    # 1. O 级：已成交（最高优先级）
-    ratings[is_ordered] = "O"
-
-    # 2. 非成交样本：根据概率判断 H/A/B/N
-    not_ordered = ~is_ordered
-
-    # H 级：高置信度正例（概率 >= threshold 且预测标签 = 1）
-    h_mask = not_ordered & (y_proba >= threshold)
-    ratings[h_mask] = "H"
-
-    # A 级：中等置信度（threshold * 0.7 <= 概率 < threshold）
-    a_mask = not_ordered & (y_proba >= threshold * 0.7) & (y_proba < threshold)
-    ratings[a_mask] = "A"
-
-    # B 级：低置信度（threshold * 0.3 <= 概率 < threshold * 0.7）
-    b_mask = not_ordered & (y_proba >= threshold * 0.3) & (y_proba < threshold * 0.7)
-    ratings[b_mask] = "B"
-
-    # N 级：无意向（概率 < threshold * 0.3）- 已默认
-
-    return ratings
-
-
-def predict(
-    model_path: str,
-    data_path: str,
-    output_path: Optional[str] = None,
-    include_original: bool = False,
-    include_ohab: bool = False,
-    ohab_threshold: float = 0.5,
-    id_column: str = "线索唯一ID",
+def prepare_data_for_prediction(
+    df: pd.DataFrame,
+    target: str,
+    interaction_context: dict,
+    excluded_columns: List[str],
 ) -> pd.DataFrame:
     """
-    对数据进行预测
+    为预测准备数据
 
     Args:
-        model_path: 模型路径
-        data_path: 数据文件路径
-        output_path: 输出文件路径（可选）
-        include_original: 是否包含原始列
-        include_ohab: 是否包含 OHAB 评级
-        ohab_threshold: OHAB 评级判定阈值
-        id_column: ID 列名（用于标识记录）
+        df: 原始数据
+        target: 目标变量
+        interaction_context: 特征工程上下文
+        excluded_columns: 排除列
 
     Returns:
-        追加预测结果的 DataFrame
+        处理后的数据
     """
-    model_path = Path(model_path)
-    data_path = Path(data_path)
-
-    # 1. 加载模型元数据
-    logger.info("加载模型元数据...")
-    metadata = load_feature_metadata(model_path)
-    interaction_context = metadata.get("interaction_context", {})
-
-    # 2. 加载模型
-    logger.info(f"加载模型: {model_path}")
-    predictor = LeadScoringPredictor.load(str(model_path))
-    target = predictor.label
-    logger.info(f"目标变量: {target}")
-
-    # 3. 加载数据（自动适配）
-    logger.info(f"加载数据: {data_path}")
-    loader = DataLoader(str(data_path), auto_adapt=True)
-    df = loader.load()
-    logger.info(f"数据量: {len(df)} 行, {len(df.columns)} 列")
-
-    # 4. 特征工程（与训练时一致）
-    logger.info("执行特征工程...")
     from config.config import config
 
     feature_engineer = FeatureEngineer(
@@ -237,45 +131,318 @@ def predict(
     )
     df_processed, _ = feature_engineer.transform(df, interaction_context=interaction_context)
 
-    # 5. 删除排除列
-    excluded_columns = get_excluded_columns(target)
+    # 删除排除列
     cols_to_drop = [col for col in excluded_columns if col in df_processed.columns and col != target]
     if cols_to_drop:
         df_processed = df_processed.drop(columns=cols_to_drop)
-        logger.info(f"删除 {len(cols_to_drop)} 个排除列")
 
-    # 6. 预测
-    logger.info("执行预测...")
+    return df_processed
+
+
+def predict_simple(
+    df: pd.DataFrame,
+    model_path: Path,
+    id_column: str,
+    include_original: bool,
+    ohab_threshold: float,
+) -> pd.DataFrame:
+    """
+    简单模式预测
+
+    使用单个模型（14天试驾概率）推断 OHAB 评级。
+
+    Args:
+        df: 输入数据
+        model_path: 模型路径
+        id_column: ID 列名
+        include_original: 是否包含原始列
+        ohab_threshold: OHAB 阈值
+
+    Returns:
+        预测结果 DataFrame
+    """
+    logger.info("=== 简单模式预测 ===")
+
+    # 加载模型
+    predictor = LeadScoringPredictor.load(str(model_path))
+    target = predictor.label
+    logger.info(f"目标变量: {target}")
+
+    # 加载特征元数据
+    metadata = load_feature_metadata(model_path)
+    interaction_context = metadata.get("interaction_context", {})
+
+    # 准备数据
+    excluded_columns = get_excluded_columns(target)
+    df_processed = prepare_data_for_prediction(df, target, interaction_context, excluded_columns)
+
+    # 预测
     y_proba = predictor.get_positive_proba(df_processed)
     y_pred = predictor.predict(df_processed)
 
-    # 7. 构建结果 DataFrame
+    # 推导 OHAB 评级
+    rater = OHABRater(mode=PredictionMode.SIMPLE, thresholds={"H": ohab_threshold})
+    result = rater.derive(df, proba_14d=y_proba)
+
+    # 构建结果
     if include_original:
-        # 返回原始数据 + 预测结果
         result_df = df.copy()
     else:
-        # 仅返回 ID + 预测结果
         result_df = pd.DataFrame()
         if id_column in df.columns:
             result_df[id_column] = df[id_column]
 
     result_df["预测概率"] = y_proba
     result_df["预测标签"] = y_pred
+    result_df = rater.add_to_dataframe(result_df, result, include_proba=True)
 
-    # 8. OHAB 评级推导
-    if include_ohab:
-        logger.info("推导 OHAB 评级...")
-        is_ordered = detect_ordered_status(df)
-        ohab_ratings = derive_ohab_rating(y_proba, is_ordered, threshold=ohab_threshold)
-        result_df["OHAB评级"] = ohab_ratings
+    return result_df
 
-        # 统计 OHAB 分布
-        ohab_dist = pd.Series(ohab_ratings).value_counts()
-        logger.info(f"OHAB 分布: {ohab_dist.to_dict()}")
 
-    logger.info(f"预测完成: {len(result_df)} 条记录")
+def predict_medium(
+    df: pd.DataFrame,
+    ensemble_path: Path,
+    id_column: str,
+    include_original: bool,
+    thresholds: Dict[str, float],
+) -> pd.DataFrame:
+    """
+    中等模式预测
 
-    # 9. 保存输出
+    使用三模型集成（7/14/21天试驾概率）推断 OHAB 评级。
+
+    Args:
+        df: 输入数据
+        ensemble_path: 集成模型目录
+        id_column: ID 列名
+        include_original: 是否包含原始列
+        thresholds: 各级别阈值
+
+    Returns:
+        预测结果 DataFrame
+    """
+    logger.info("=== 中等模式预测 ===")
+
+    # 加载模型
+    models = load_ensemble_models(ensemble_path, label_prefix="试驾标签")
+
+    # 加载特征元数据（使用第一个模型）
+    first_model_path = ensemble_path / "试驾标签_7天"
+    metadata = load_feature_metadata(first_model_path)
+    interaction_context = metadata.get("interaction_context", {})
+
+    # 预测各时间窗口概率
+    probas = {}
+    for window, label in [("7天", "试驾标签_7天"), ("14天", "试驾标签_14天"), ("21天", "试驾标签_21天")]:
+        if label not in models:
+            logger.warning(f"模型缺失: {label}，使用默认概率 0")
+            probas[window] = np.zeros(len(df))
+            continue
+
+        predictor = models[label]
+        excluded_columns = get_excluded_columns(label)
+        df_processed = prepare_data_for_prediction(df, label, interaction_context, excluded_columns)
+        probas[window] = predictor.get_positive_proba(df_processed)
+        logger.info(f"{label} 预测完成")
+
+    # 推导 OHAB 评级
+    rater = OHABRater(mode=PredictionMode.MEDIUM, thresholds=thresholds)
+    result = rater.derive(
+        df,
+        drive_proba_7d=probas["7天"],
+        drive_proba_14d=probas["14天"],
+        drive_proba_21d=probas["21天"],
+    )
+
+    # 构建结果
+    if include_original:
+        result_df = df.copy()
+    else:
+        result_df = pd.DataFrame()
+        if id_column in df.columns:
+            result_df[id_column] = df[id_column]
+
+    result_df = rater.add_to_dataframe(result_df, result, include_proba=True)
+
+    return result_df
+
+
+def predict_advanced(
+    df: pd.DataFrame,
+    drive_ensemble_path: Path,
+    order_ensemble_path: Path,
+    id_column: str,
+    include_original: bool,
+    thresholds: Dict[str, float],
+) -> pd.DataFrame:
+    """
+    高等模式预测
+
+    分阶段预测（试驾前+试驾后），完全符合业务规则。
+
+    Args:
+        df: 输入数据
+        drive_ensemble_path: 试驾集成模型目录
+        order_ensemble_path: 下订集成模型目录
+        id_column: ID 列名
+        include_original: 是否包含原始列
+        thresholds: 各级别阈值
+
+    Returns:
+        预测结果 DataFrame
+    """
+    logger.info("=== 高等模式预测 ===")
+
+    # 加载试驾模型
+    drive_models = load_ensemble_models(drive_ensemble_path, label_prefix="试驾标签")
+    logger.info(f"试驾模型: {list(drive_models.keys())}")
+
+    # 加载下订模型
+    order_models = load_ensemble_models(order_ensemble_path, label_prefix="下订标签")
+    logger.info(f"下订模型: {list(order_models.keys())}")
+
+    # 加载特征元数据
+    drive_metadata = load_feature_metadata(drive_ensemble_path / "试驾标签_7天")
+    drive_interaction_context = drive_metadata.get("interaction_context", {})
+
+    order_metadata = load_feature_metadata(order_ensemble_path / "下订标签_7天")
+    order_interaction_context = order_metadata.get("interaction_context", {})
+
+    # 预测试驾概率
+    drive_probas = {}
+    for window, label in [("7天", "试驾标签_7天"), ("14天", "试驾标签_14天"), ("21天", "试驾标签_21天")]:
+        if label not in drive_models:
+            logger.warning(f"试驾模型缺失: {label}")
+            drive_probas[window] = np.zeros(len(df))
+            continue
+
+        predictor = drive_models[label]
+        excluded_columns = get_excluded_columns(label)
+        df_processed = prepare_data_for_prediction(df, label, drive_interaction_context, excluded_columns)
+        drive_probas[window] = predictor.get_positive_proba(df_processed)
+        logger.info(f"{label} 预测完成")
+
+    # 预测下订概率
+    order_probas = {}
+    for window, label in [("7天", "下订标签_7天"), ("14天", "下订标签_14天"), ("21天", "下订标签_21天")]:
+        if label not in order_models:
+            logger.warning(f"下订模型缺失: {label}")
+            order_probas[window] = np.zeros(len(df))
+            continue
+
+        predictor = order_models[label]
+        excluded_columns = get_excluded_columns(label)
+        df_processed = prepare_data_for_prediction(df, label, order_interaction_context, excluded_columns)
+        order_probas[window] = predictor.get_positive_proba(df_processed)
+        logger.info(f"{label} 预测完成")
+
+    # 推导 OHAB 评级
+    rater = OHABRater(mode=PredictionMode.ADVANCED, thresholds=thresholds)
+    result = rater.derive(
+        df,
+        drive_proba_7d=drive_probas["7天"],
+        drive_proba_14d=drive_probas["14天"],
+        drive_proba_21d=drive_probas["21天"],
+        order_proba_7d=order_probas["7天"],
+        order_proba_14d=order_probas["14天"],
+        order_proba_21d=order_probas["21天"],
+    )
+
+    # 构建结果
+    if include_original:
+        result_df = df.copy()
+    else:
+        result_df = pd.DataFrame()
+        if id_column in df.columns:
+            result_df[id_column] = df[id_column]
+
+    result_df = rater.add_to_dataframe(result_df, result, include_proba=True)
+
+    return result_df
+
+
+def predict(
+    data_path: str,
+    output_path: Optional[str] = None,
+    mode: str = "simple",
+    # 简单模式参数
+    model_path: Optional[str] = None,
+    # 中等模式参数
+    ensemble_path: Optional[str] = None,
+    # 高等模式参数
+    drive_ensemble_path: Optional[str] = None,
+    order_ensemble_path: Optional[str] = None,
+    # 通用参数
+    include_original: bool = False,
+    thresholds: Optional[Dict[str, float]] = None,
+    id_column: str = "线索唯一ID",
+) -> pd.DataFrame:
+    """
+    对数据进行预测
+
+    Args:
+        data_path: 数据文件路径
+        output_path: 输出文件路径
+        mode: 预测模式（simple/medium/advanced）
+        model_path: 单模型路径（简单模式）
+        ensemble_path: 试驾集成模型目录（中等模式）
+        drive_ensemble_path: 试驾集成模型目录（高等模式）
+        order_ensemble_path: 下订集成模型目录（高等模式）
+        include_original: 是否包含原始列
+        thresholds: OHAB 评级阈值
+        id_column: ID 列名
+
+    Returns:
+        预测结果 DataFrame
+    """
+    thresholds = thresholds or {"H": 0.5, "A": 0.5, "B": 0.5}
+    data_path = Path(data_path)
+
+    # 加载数据
+    logger.info(f"加载数据: {data_path}")
+    loader = DataLoader(str(data_path), auto_adapt=True)
+    df = loader.load()
+    logger.info(f"数据量: {len(df)} 行, {len(df.columns)} 列")
+
+    # 根据模式执行预测
+    if mode == "simple":
+        if not model_path:
+            raise ValueError("简单模式需要 --model-path 参数")
+        result_df = predict_simple(
+            df=df,
+            model_path=Path(model_path),
+            id_column=id_column,
+            include_original=include_original,
+            ohab_threshold=thresholds.get("H", 0.5),
+        )
+
+    elif mode == "medium":
+        if not ensemble_path:
+            raise ValueError("中等模式需要 --ensemble-path 参数")
+        result_df = predict_medium(
+            df=df,
+            ensemble_path=Path(ensemble_path),
+            id_column=id_column,
+            include_original=include_original,
+            thresholds=thresholds,
+        )
+
+    elif mode == "advanced":
+        if not drive_ensemble_path or not order_ensemble_path:
+            raise ValueError("高等模式需要 --drive-ensemble-path 和 --order-ensemble-path 参数")
+        result_df = predict_advanced(
+            df=df,
+            drive_ensemble_path=Path(drive_ensemble_path),
+            order_ensemble_path=Path(order_ensemble_path),
+            id_column=id_column,
+            include_original=include_original,
+            thresholds=thresholds,
+        )
+
+    else:
+        raise ValueError(f"未知的预测模式: {mode}")
+
+    # 保存输出
     if output_path:
         output_path = Path(output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -286,12 +453,46 @@ def predict(
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="模型预测脚本")
+    parser = argparse.ArgumentParser(
+        description="模型预测脚本",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+预测模式说明:
+  simple   - 简单模式：使用单模型（14天试驾概率）推断 OHAB
+  medium   - 中等模式：使用三模型集成（7/14/21天试驾概率）推断 OHAB
+  advanced - 高等模式：分阶段预测（试驾前+试驾后），完全符合业务规则
+
+示例:
+  # 简单模式
+  uv run python scripts/predict.py \\
+      --mode simple \\
+      --model-path ./outputs/models/test_drive_model \\
+      --data-path ./data/final_v4_test.parquet \\
+      --output ./predictions.csv
+
+  # 中等模式
+  uv run python scripts/predict.py \\
+      --mode medium \\
+      --ensemble-path ./outputs/models/test_drive_ensemble \\
+      --data-path ./data/final_v4_test.parquet \\
+      --output ./predictions.csv
+
+  # 高等模式
+  uv run python scripts/predict.py \\
+      --mode advanced \\
+      --drive-ensemble-path ./outputs/models/test_drive_ensemble \\
+      --order-ensemble-path ./outputs/models/order_after_drive_ensemble \\
+      --data-path ./data/final_v4_test.parquet \\
+      --output ./predictions.csv
+        """,
+    )
+
     parser.add_argument(
-        "--model-path",
+        "--mode",
         type=str,
-        required=True,
-        help="模型路径",
+        default="simple",
+        choices=["simple", "medium", "advanced"],
+        help="预测模式（默认: simple）",
     )
     parser.add_argument(
         "--data-path",
@@ -305,21 +506,60 @@ def parse_args():
         default=None,
         help="输出文件路径（默认不保存）",
     )
+
+    # 简单模式参数
+    parser.add_argument(
+        "--model-path",
+        type=str,
+        default=None,
+        help="单模型路径（简单模式必需）",
+    )
+
+    # 中等模式参数
+    parser.add_argument(
+        "--ensemble-path",
+        type=str,
+        default=None,
+        help="试驾集成模型目录（中等模式必需）",
+    )
+
+    # 高等模式参数
+    parser.add_argument(
+        "--drive-ensemble-path",
+        type=str,
+        default=None,
+        help="试驾集成模型目录（高等模式必需）",
+    )
+    parser.add_argument(
+        "--order-ensemble-path",
+        type=str,
+        default=None,
+        help="下订集成模型目录（高等模式必需）",
+    )
+
+    # 通用参数
     parser.add_argument(
         "--include-original",
         action="store_true",
-        help="包含原始数据列（默认仅输出 ID + 预测结果）",
+        help="包含原始数据列",
     )
     parser.add_argument(
-        "--include-ohab",
-        action="store_true",
-        help="包含 OHAB 评级（O/H/A/B/N）",
-    )
-    parser.add_argument(
-        "--ohab-threshold",
+        "--threshold-h",
         type=float,
         default=0.5,
-        help="OHAB 评级判定阈值（默认: 0.5）",
+        help="H 级阈值（默认: 0.5）",
+    )
+    parser.add_argument(
+        "--threshold-a",
+        type=float,
+        default=0.5,
+        help="A 级阈值（默认: 0.5）",
+    )
+    parser.add_argument(
+        "--threshold-b",
+        type=float,
+        default=0.5,
+        help="B 级阈值（默认: 0.5）",
     )
     parser.add_argument(
         "--id-column",
@@ -327,6 +567,7 @@ def parse_args():
         default="线索唯一ID",
         help="ID 列名（默认: 线索唯一ID）",
     )
+
     return parser.parse_args()
 
 
@@ -339,35 +580,47 @@ def main():
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     )
 
+    # 构建阈值字典
+    thresholds = {
+        "H": args.threshold_h,
+        "A": args.threshold_a,
+        "B": args.threshold_b,
+    }
+
     result_df = predict(
-        model_path=args.model_path,
         data_path=args.data_path,
         output_path=args.output,
+        mode=args.mode,
+        model_path=args.model_path,
+        ensemble_path=args.ensemble_path,
+        drive_ensemble_path=args.drive_ensemble_path,
+        order_ensemble_path=args.order_ensemble_path,
         include_original=args.include_original,
-        include_ohab=args.include_ohab,
-        ohab_threshold=args.ohab_threshold,
+        thresholds=thresholds,
         id_column=args.id_column,
     )
 
     # 输出统计
     print("\n" + "=" * 60)
-    print("预测完成")
+    print(f"预测完成（模式: {args.mode}）")
     print("=" * 60)
     print(f"数据量: {len(result_df)} 条")
-    print(f"预测概率分布:")
-    print(f"  均值: {result_df['预测概率'].mean():.4f}")
-    print(f"  中位数: {result_df['预测概率'].median():.4f}")
-    print(f"  最大值: {result_df['预测概率'].max():.4f}")
-    print(f"  最小值: {result_df['预测概率'].min():.4f}")
-    print(f"\n预测标签分布:")
-    print(result_df["预测标签"].value_counts())
 
+    # OHAB 分布
     if "OHAB评级" in result_df.columns:
         print(f"\nOHAB 评级分布:")
         for rating in ["O", "H", "A", "B", "N"]:
             count = (result_df["OHAB评级"] == rating).sum()
             pct = count / len(result_df) * 100
             print(f"  {rating} 级: {count} ({pct:.2f}%)")
+
+    # 评级阶段分布
+    if "评级阶段" in result_df.columns:
+        print(f"\n评级阶段分布:")
+        for stage in ["O", "试驾前", "试驾后"]:
+            count = (result_df["评级阶段"] == stage).sum()
+            pct = count / len(result_df) * 100
+            print(f"  {stage}: {count} ({pct:.2f}%)")
 
     if args.output:
         print(f"\n结果已保存: {args.output}")
