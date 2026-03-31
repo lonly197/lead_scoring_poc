@@ -60,7 +60,12 @@ TASK_NAME = "train_test_drive_ensemble"
 TIME_WINDOWS = ["7天", "14天", "21天"]
 
 # 目标变量列名（训练时保留，不能删除）
-TARGET_COLUMNS = ["label_7天内试驾", "label_14天内试驾", "label_21天内试驾", "label_OHAB"]
+# 包含试驾标签（7/14/21天）和到店标签（用于其他任务）
+TARGET_COLUMNS = [
+    "试驾标签_7天", "试驾标签_14天", "试驾标签_21天", "试驾标签_30天",
+    "到店标签_7天", "到店标签_14天", "到店标签_30天",
+    "label_OHAB", "线索评级结果"
+]
 
 
 def remove_leakage_columns(df, target_label: str = None):
