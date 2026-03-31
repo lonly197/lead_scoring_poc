@@ -76,3 +76,6 @@ docs/*报告_*.pdf
 # AutoGluon
 AutogluonModels/
 ag_*/
+
+# Ray temporary files
+.ray_tmp/
