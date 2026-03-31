@@ -13,13 +13,17 @@ from typing import TYPE_CHECKING, Any, Dict, Optional, Union
 
 if TYPE_CHECKING:
     import polars as pl
+    from polars import DataFrame, LazyFrame
 
 
 def load_data(
     path: Union[str, Path],
     engine: str = "polars",
+    lazy: bool = False,
+    columns: Optional[List[str]] = None,
+    n_rows: Optional[int] = None,
     **kwargs,
-) -> "pl.DataFrame":
+) -> Union["pl.DataFrame", "pl.LazyFrame", "pd.DataFrame"]:
     """
     自动检测格式加载数据文件
 
@@ -28,16 +32,27 @@ def load_data(
     Args:
         path: 数据文件路径
         engine: 加载引擎 ('polars' 或 'pandas')
+        lazy: 是否使用惰性模式（仅 polars + parquet/csv 支持）
+        columns: 仅加载指定列（列裁剪，优化大文件性能）
+        n_rows: 仅加载前 N 行（用于快速预览）
         **kwargs: 传递给加载函数的额外参数
 
     Returns:
-        DataFrame 对象
+        DataFrame 或 LazyFrame 对象
 
     Raises:
         FileNotFoundError: 文件不存在
-        ValueError: 不支持的文件格式
+        ValueError: 不支持的文件格式或参数组合
+
+    Example:
+        >>> # 惰性加载 + 列裁剪（大文件推荐）
+        >>> df = load_data("./large.parquet", lazy=True, columns=["id", "name"])
+        >>> df = df.filter(pl.col("id") > 100).collect()  # 惰性求值
+
+        >>> # 快速预览前 1000 行
+        >>> df = load_data("./large.parquet", n_rows=1000)
     """
-    path = Path(path).resolve()  # 规范化路径，防止路径遍历
+    path = Path(path).resolve()
 
     if not path.exists():
         raise FileNotFoundError(f"文件不存在: {path}")
@@ -47,38 +62,73 @@ def load_data(
     if engine == "polars":
         import polars as pl
 
+        # 惰性模式（仅支持 parquet/csv/tsv）
+        if lazy:
+            if suffix == ".parquet":
+                lf = pl.scan_parquet(path, **kwargs)
+            elif suffix == ".csv":
+                lf = pl.scan_csv(path, **kwargs)
+            elif suffix == ".tsv":
+                lf = pl.scan_csv(path, separator="\t", **kwargs)
+            else:
+                raise ValueError(f"惰性模式不支持 Excel 文件: {suffix}")
+
+            # 列裁剪
+            if columns:
+                lf = lf.select(columns)
+
+            # 行数限制
+            if n_rows:
+                lf = lf.head(n_rows)
+
+            return lf
+
+        # 急性模式
         if suffix == ".parquet":
-            return pl.read_parquet(path, **kwargs)
+            return pl.read_parquet(path, columns=columns, n_rows=n_rows, **kwargs)
         elif suffix == ".csv":
-            return pl.read_csv(path, **kwargs)
+            return pl.read_csv(path, columns=columns, n_rows=n_rows, **kwargs)
         elif suffix == ".tsv":
-            return pl.read_csv(path, separator="\t", **kwargs)
+            return pl.read_csv(path, separator="\t", columns=columns, n_rows=n_rows, **kwargs)
         elif suffix in (".xlsx", ".xls"):
+            if columns or n_rows:
+                # Excel 需要后处理
+                df = pl.read_excel(path, engine="calamine", **kwargs)
+                if columns:
+                    df = df.select(columns)
+                if n_rows:
+                    df = df.head(n_rows)
+                return df
             return pl.read_excel(path, engine="calamine", **kwargs)
         else:
             # 尝试自动检测
             with open(path, "r", encoding="utf-8", errors="ignore") as f:
                 first_line = f.readline()
             sep = "\t" if first_line.count("\t") > first_line.count(",") else ","
-            return pl.read_csv(path, separator=sep, **kwargs)
+            return pl.read_csv(path, separator=sep, columns=columns, n_rows=n_rows, **kwargs)
 
     else:  # pandas
         import pandas as pd
 
         if suffix == ".parquet":
-            return pd.read_parquet(path, **kwargs)
+            return pd.read_parquet(path, columns=columns, **kwargs)
         elif suffix == ".csv":
-            return pd.read_csv(path, **kwargs)
+            return pd.read_csv(path, usecols=columns, nrows=n_rows, **kwargs)
         elif suffix == ".tsv":
-            return pd.read_csv(path, sep="\t", **kwargs)
+            return pd.read_csv(path, sep="\t", usecols=columns, nrows=n_rows, **kwargs)
         elif suffix in (".xlsx", ".xls"):
-            return pd.read_excel(path, **kwargs)
+            df = pd.read_excel(path, **kwargs)
+            if columns:
+                df = df[columns]
+            if n_rows:
+                df = df.head(n_rows)
+            return df
         else:
-            return pd.read_csv(path, **kwargs)
+            return pd.read_csv(path, usecols=columns, nrows=n_rows, **kwargs)
 
 
 def save_data(
-    df: Union["pl.DataFrame", "pd.DataFrame"],
+    df: Union["pl.DataFrame", "pl.LazyFrame", "pd.DataFrame"],
     path: Union[str, Path],
     **kwargs,
 ) -> Path:
@@ -86,7 +136,7 @@ def save_data(
     自动检测格式保存数据文件
 
     Args:
-        df: DataFrame 对象
+        df: DataFrame 或 LazyFrame 对象
         path: 输出文件路径
         **kwargs: 传递给保存函数的额外参数
 
@@ -96,15 +146,20 @@ def save_data(
     Raises:
         TypeError: 不支持的 DataFrame 类型
     """
-    path = Path(path).resolve()  # 规范化路径
+    path = Path(path).resolve()
     path.parent.mkdir(parents=True, exist_ok=True)
 
     suffix = path.suffix.lower()
 
     # 检测 DataFrame 类型
-    df_type = type(df).__module__
+    class_name = type(df).__name__
 
-    if "polars" in df_type:
+    # LazyFrame 需要先 collect
+    if class_name == "LazyFrame":
+        df = df.collect()
+        class_name = "DataFrame"
+
+    if "polars" in type(df).__module__ or class_name == "DataFrame":
         import polars as pl
 
         if suffix == ".parquet":
