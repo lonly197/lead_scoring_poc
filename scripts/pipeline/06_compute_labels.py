@@ -86,6 +86,14 @@ def compute_labels_with_duckdb(
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
         # 使用 CTE 计算天数差，然后基于天数差计算标签
+        #
+        # 关键修改：无试驾时间的样本标签为 0（负样本），而非 NULL
+        # 这样可以保留全量线索数据，模型可以学习"谁会试驾"
+        #
+        # 标签定义：
+        # - label_7天内试驾 = 1: 有试驾时间且 ≤ 7 天内试驾
+        # - label_7天内试驾 = 0: 无试驾时间 或 超过 7 天才试驾
+        #
         con.execute(f"""
             COPY (
                 WITH parsed AS (
@@ -104,28 +112,29 @@ def compute_labels_with_duckdb(
                 )
                 SELECT
                     *,
-                    -- 时间窗口二分类标签
+                    -- 时间窗口二分类标签（无试驾时间 = 0，即负样本）
                     CASE
-                        WHEN "试驾时间" IS NULL THEN NULL
+                        WHEN "试驾时间" IS NULL THEN 0
                         WHEN 试驾天数差 <= 7 THEN 1
                         ELSE 0
                     END AS label_7天内试驾,
 
                     CASE
-                        WHEN "试驾时间" IS NULL THEN NULL
+                        WHEN "试驾时间" IS NULL THEN 0
                         WHEN 试驾天数差 <= 14 THEN 1
                         ELSE 0
                     END AS label_14天内试驾,
 
                     CASE
-                        WHEN "试驾时间" IS NULL THEN NULL
+                        WHEN "试驾时间" IS NULL THEN 0
                         WHEN 试驾天数差 <= 21 THEN 1
                         ELSE 0
                     END AS label_21天内试驾,
 
                     -- OHAB 级别（字符串）
+                    -- 无试驾时间 = 'N'（未试驾），作为负样本标签
                     CASE
-                        WHEN "试驾时间" IS NULL THEN NULL
+                        WHEN "试驾时间" IS NULL THEN 'N'
                         WHEN 试驾天数差 <= 7 THEN 'H'
                         WHEN 试驾天数差 <= 14 THEN 'A'
                         WHEN 试驾天数差 <= 21 THEN 'B'
@@ -139,16 +148,23 @@ def compute_labels_with_duckdb(
         # 3. 统计标签分布
         log("\n标签分布统计:")
 
-        # OHAB 分布
+        # OHAB 分布（包含 N = 未试驾）
         ohab_dist = con.execute(f"""
             SELECT label_OHAB, COUNT(*) as cnt
             FROM read_parquet('{output_path}')
-            WHERE label_OHAB IS NOT NULL
             GROUP BY label_OHAB
-            ORDER BY label_OHAB
+            ORDER BY
+                CASE label_OHAB
+                    WHEN 'H' THEN 1
+                    WHEN 'A' THEN 2
+                    WHEN 'B' THEN 3
+                    WHEN 'O' THEN 4
+                    WHEN 'N' THEN 5
+                    ELSE 6
+                END
         """).fetchall()
 
-        log("  OHAB 级别分布:")
+        log("  OHAB 级别分布（含 N=未试驾）:")
         total_labeled = sum(row[1] for row in ohab_dist)
         for level, cnt in ohab_dist:
             pct = cnt / total_labeled * 100 if total_labeled > 0 else 0
@@ -158,7 +174,6 @@ def compute_labels_with_duckdb(
         label_7_dist = con.execute(f"""
             SELECT label_7天内试驾, COUNT(*) as cnt
             FROM read_parquet('{output_path}')
-            WHERE label_7天内试驾 IS NOT NULL
             GROUP BY label_7天内试驾
         """).fetchall()
         log(f"  7天内试驾: {dict(label_7_dist)}")
@@ -167,7 +182,6 @@ def compute_labels_with_duckdb(
         label_14_dist = con.execute(f"""
             SELECT label_14天内试驾, COUNT(*) as cnt
             FROM read_parquet('{output_path}')
-            WHERE label_14天内试驾 IS NOT NULL
             GROUP BY label_14天内试驾
         """).fetchall()
         log(f"  14天内试驾: {dict(label_14_dist)}")
@@ -176,7 +190,6 @@ def compute_labels_with_duckdb(
         label_21_dist = con.execute(f"""
             SELECT label_21天内试驾, COUNT(*) as cnt
             FROM read_parquet('{output_path}')
-            WHERE label_21天内试驾 IS NOT NULL
             GROUP BY label_21天内试驾
         """).fetchall()
         log(f"  21天内试驾: {dict(label_21_dist)}")
@@ -208,15 +221,20 @@ def main() -> int:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 标签说明：
-  label_7天内试驾  - 1: 7天内试驾（H级）, 0: 超过7天
-  label_14天内试驾 - 1: 14天内试驾（H+A级）, 0: 超过14天
-  label_21天内试驾 - 1: 21天内试驾（H+A+B级）, 0: 超过21天
-  label_OHAB       - H: 7天内, A: 14天内, B: 21天内, O: 超过21天
+  label_7天内试驾  - 1: 7天内试驾（H级）, 0: 未试驾或超过7天
+  label_14天内试驾 - 1: 14天内试驾（H+A级）, 0: 未试驾或超过14天
+  label_21天内试驾 - 1: 21天内试驾（H+A+B级）, 0: 未试驾或超过21天
+  label_OHAB       - H: 7天内, A: 14天内, B: 21天内, O: 超过21天, N: 未试驾
 
 业务规则：
   H级: 7天内试驾
   A级: 14天内试驾
   B级: 21天内试驾
+  N级: 未试驾（负样本）
+
+重要：
+  无试驾时间的样本标签为 0（负样本），保留全量线索数据。
+  这样模型可以学习"哪些线索会试驾"，而非"已试驾客户何时试驾"。
 
 示例:
     uv run python scripts/pipeline/06_compute_labels.py \\
