@@ -86,9 +86,7 @@ def split_random_duckdb(
         total_rows = con.execute("SELECT COUNT(*) FROM source").fetchone()[0]
         test_size = int(total_rows * test_ratio)
 
-        # 设置随机种子
-        con.execute(f"SET seed = {random_seed}")
-
+        # 注意：DuckDB 不支持 SET seed，RANDOM() 无法设置种子
         # 使用 RANDOM() 进行随机拆分
         con.execute(f"""
             CREATE OR REPLACE VIEW split_view AS
