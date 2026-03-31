@@ -272,6 +272,9 @@ def train_single_model(
     if args.included_model_types:
         included_model_types = [t.strip() for t in args.included_model_types.split(",")]
 
+    # 当指定模型类型时，默认禁用集成模型
+    fit_weighted_ensemble = False if included_model_types else None
+
     predictor = LeadScoringPredictor(
         label=target_label,
         output_path=str(model_dir),
@@ -284,6 +287,8 @@ def train_single_model(
         excluded_model_types=excluded_model_types,
         num_folds_parallel=args.num_folds_parallel,
         included_model_types=included_model_types,
+        # 集成模型控制
+        fit_weighted_ensemble=fit_weighted_ensemble,
         # Bagging/Stacking 参数：命令行 > config.model > None
         num_bag_folds=args.num_bag_folds if args.num_bag_folds is not None else config.model.num_bag_folds,
         num_stack_levels=args.num_stack_levels if args.num_stack_levels is not None else config.model.num_stack_levels,
@@ -423,6 +428,8 @@ def train_single_model_spawn(
         excluded_model_types=excluded_model_types,
         num_folds_parallel=getattr(args, "num_folds_parallel", None),
         included_model_types=included_model_types,
+        # 集成模型控制
+        fit_weighted_ensemble=getattr(args, "fit_weighted_ensemble", None),
         # Bagging/Stacking 参数：命令行 > config.model > None
         num_bag_folds=args.num_bag_folds if args.num_bag_folds is not None else config.model.num_bag_folds,
         num_stack_levels=args.num_stack_levels if args.num_stack_levels is not None else config.model.num_stack_levels,
@@ -484,13 +491,22 @@ def train_models_parallel(
     logger.info(f"数据缓存: {cache_dir}")
 
     # 准备轻量级参数（只传递路径和字符串，不传递复杂对象）
+    # 处理 included_model_types：确保是列表格式
+    included_model_types_list = None
+    if args.included_model_types:
+        included_model_types_list = [t.strip() for t in args.included_model_types.split(",")]
+
+    # 当指定模型类型时，默认禁用集成模型
+    fit_weighted_ensemble = False if included_model_types_list else None
+
     args_dict = {
         "preset": args.preset,
         "time_limit": args.time_limit,
         "max_memory_ratio": args.max_memory_ratio,
         "exclude_memory_heavy_models": getattr(args, "exclude_memory_heavy_models", False),
         "num_folds_parallel": getattr(args, "num_folds_parallel", None),
-        "included_model_types": args.included_model_types,
+        "included_model_types": included_model_types_list,
+        "fit_weighted_ensemble": fit_weighted_ensemble,
         # Bagging/Stacking 参数
         "num_bag_folds": getattr(args, "num_bag_folds", None),
         "num_stack_levels": getattr(args, "num_stack_levels", None),
