@@ -463,7 +463,8 @@ def train_models_parallel(
             try:
                 result = future.result()
                 results.append(result)
-                logger.info(f"完成: {target} (ROC-AUC: {result['roc_auc']:.4f if result['roc_auc'] else 'N/A'})")
+                roc_auc_display = f"{result['roc_auc']:.4f}" if result.get('roc_auc') is not None else 'N/A'
+                logger.info(f"完成: {target} (ROC-AUC: {roc_auc_display})")
             except Exception as e:
                 logger.error(f"训练失败: {target}, 错误: {e}")
                 # 清理临时缓存
@@ -692,7 +693,8 @@ def main():
         print(f"训练耗时: {format_training_duration(duration_seconds)}")
         print("\n各模型 ROC-AUC:")
         for r in all_results:
-            print(f"  {r['target']}: {r['roc_auc']:.4f if r['roc_auc'] else 'N/A'}")
+            roc_auc_display = f"{r['roc_auc']:.4f}" if r.get('roc_auc') is not None else 'N/A'
+            print(f"  {r['target']}: {roc_auc_display}")
         print(f"\n模型目录: {output_dir}")
         print(f"日志文件: {log_file}")
 
