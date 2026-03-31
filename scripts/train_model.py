@@ -35,6 +35,7 @@ TRAIN_SCRIPTS = {
     "test_drive": "train_test_drive.py",
     "ohab": "train_ohab.py",
     "ensemble": "train_test_drive_ensemble.py",
+    "order_after_drive": "train_order_after_drive.py",
 }
 
 # 任务别名
@@ -43,6 +44,7 @@ TASK_ALIASES = {
     "train_test_drive": "test_drive",
     "train_ohab": "ohab",
     "train_ensemble": "ensemble",
+    "train_order_after_drive": "order_after_drive",
     "arrive_oot": "arrive",
     "ohab_oot": "ohab",
 }
@@ -142,16 +144,18 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 可用任务:
-  arrive      - 到店预测训练
-  test_drive  - 试驾预测训练
-  ohab        - OHAB 评级训练
-  ensemble    - 三模型集成训练（7/14/21天试驾预测）
+  arrive            - 到店预测训练
+  test_drive        - 试驾预测训练
+  ohab              - OHAB 评级训练
+  ensemble          - 三模型集成训练（7/14/21天试驾预测）
+  order_after_drive - 三模型下订预测训练（试驾后下订商谈阶段）
 
 别名支持:
   train_arrive, arrive_oot -> arrive
   train_test_drive -> test_drive
   train_ohab, ohab_oot -> ohab
   train_ensemble -> ensemble
+  train_order_after_drive -> order_after_drive
 
 示例:
   # 前台运行试驾预测训练
