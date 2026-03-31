@@ -9,6 +9,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 uv sync
 
 # ====================
+# 数据转换（CSV/Excel → Parquet）
+# ====================
+
+# 转换单个文件（推荐用于大文件）
+uv run python scripts/convert_to_parquet.py ./data/202602~03.tsv
+
+# 批量转换目录
+uv run python scripts/convert_to_parquet.py ./data --batch
+
+# ====================
 # 数据加载模式
 # ====================
 
@@ -189,14 +199,17 @@ train_arrive.py          → 辅助任务（到店预测）
 
 ## 数据格式适配
 
-项目支持两种数据格式，通过 `auto_adapt=True` 自动适配：
+项目支持多种数据格式，通过 `auto_adapt=True` 自动适配：
 
 | 格式 | 文件 | 特点 |
 |------|------|------|
-| 原格式 | `20260308-v2.csv` | 逗号分隔，有表头，60列 |
+| Parquet | `*.parquet` | **推荐**：加载快、体积小、自带类型 |
 | 新格式 | `202603.tsv` | Tab分隔，无表头，46列 |
+| 原格式 | `20260308-v2.csv` | 逗号分隔，有表头，60列 |
 
-关键代码：`src/data/adapter.py` 定义了 46 列的映射关系。修改时注意 `线索创建时间` 在索引 4，`线索评级结果`（OHAB）在索引 26。
+关键代码：`src/data/adapter.py` 定义了格式检测和列映射。修改时注意：
+- `线索创建时间` 在新格式索引 4
+- `线索评级结果`（OHAB）在新格式索引 26
 
 ## AutoML 预处理
 
@@ -234,6 +247,7 @@ train_arrive.py          → 辅助任务（到店预测）
 | `scripts/run.py` | 一级入口：统一调度器 |
 | `scripts/train_model.py` | 二级入口：训练路由器 |
 | `scripts/validate_model.py` | 二级入口：验证路由器 |
+| `scripts/convert_to_parquet.py` | 数据格式转换：CSV/TSV → Parquet |
 | `scripts/merge_data.py` | 数据合并：线索宽表 + DMP 行为 |
 | `config/config.py` | 配置管理：ID 列、泄漏字段、特征定义 |
 | `src/data/adapter.py` | 数据格式适配：列映射、目标变量计算 |

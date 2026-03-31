@@ -8,9 +8,12 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 # 安装依赖
 uv sync
 
+# 数据转换（CSV/TSV → Parquet，推荐用于大文件）
+uv run python scripts/convert_to_parquet.py ./data/202603.tsv
+
 # 训练模型（核心任务）
-uv run python scripts/train_arrive.py --data-path ./data/your_data.csv
-uv run python scripts/run.py train_arrive_oot --data-path ./data/202603.tsv  # OOT 验证（兼容任务名）
+uv run python scripts/train_arrive.py --data-path ./data/your_data.parquet
+uv run python scripts/run.py train_arrive_oot --data-path ./data/202603.parquet  # OOT 验证（兼容任务名）
 
 # 后台运行长时间训练
 uv run python scripts/run.py train_arrive --daemon
@@ -21,7 +24,7 @@ uv run python scripts/monitor.py log train_arrive -f
 uv run python scripts/monitor.py stop --all
 
 # 数据诊断（调试列映射问题）
-uv run python scripts/diagnose_data.py ./data/202603.tsv
+uv run python scripts/diagnose_data.py ./data/202603.parquet
 
 # 生成 Top-K 名单
 uv run python scripts/generate_topk.py --model-path ./outputs/models/arrive_model --k 100 500
@@ -41,14 +44,15 @@ train_test_drive.py  → 辅助任务（试驾预测）
 
 ### 数据格式适配
 
-项目支持两种数据格式，通过 `auto_adapt=True` 自动适配：
+项目支持多种数据格式，通过 `auto_adapt=True` 自动适配：
 
 | 格式 | 文件 | 特点 |
 |------|------|------|
-| 原格式 | `20260308-v2.csv` | 逗号分隔，有表头，60列 |
+| Parquet | `*.parquet` | **推荐**：加载快、体积小、自带类型 |
 | 新格式 | `202603.tsv` | Tab分隔，无表头，46列 |
+| 原格式 | `20260308-v2.csv` | 逗号分隔，有表头，60列 |
 
-关键代码：`src/data/adapter.py` 定义了 46 列的映射关系。修改时注意 `线索创建时间` 在索引 4，`线索评级结果`（OHAB）在索引 26。
+关键代码：`src/data/adapter.py` 定义了格式检测和列映射。
 
 ### AutoML 预处理
 
