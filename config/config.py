@@ -124,6 +124,13 @@ class ModelConfig:
         default_factory=lambda: _optional_env_int("MODEL_NUM_STACK_LEVELS")
     )
 
+    # 特征重要性计算模式
+    # true = 快速模式（仅计算原始特征，约5秒）
+    # false = 完整模式（计算所有派生特征，约5分钟）
+    feature_importance_fast_mode: bool = field(
+        default_factory=lambda: os.getenv("FEATURE_IMPORTANCE_FAST_MODE", "true").lower() in {"1", "true", "yes", "y", "on"}
+    )
+
 
 @dataclass
 class OHABConfig:

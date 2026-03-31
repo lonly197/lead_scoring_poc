@@ -349,7 +349,9 @@ def main():
             logger.info(f"  {k}: 命中率 {v['hit_rate']:.2%}, Lift {v['lift']:.2f}x")
 
         try:
-            importance = predictor.get_feature_importance(test_df)
+            importance = predictor.get_feature_importance(
+                test_df, fast_mode=config.model.feature_importance_fast_mode
+            )
             importance.to_csv(output_dir / "feature_importance.csv", index=False, encoding="utf-8-sig")
             if args.generate_plots:
                 plot_feature_importance(

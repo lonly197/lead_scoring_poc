@@ -36,6 +36,7 @@ ENV/
 
 # Environment
 .env
+.env.*
 
 # Data
 data/*.csv
