@@ -150,6 +150,42 @@ uv run python scripts/monitor.py stop --all
 
 ---
 
+## 数据格式转换
+
+将 CSV/TSV 转为 Parquet 格式，提升加载速度并减少存储空间：
+
+```bash
+# 基本转换（自动推断分隔符）
+uv run python scripts/convert_to_parquet.py ./data/线索数据.csv
+
+# 大文件流式处理（推荐 1GB+ 文件）
+uv run python scripts/convert_to_parquet.py ./data/大文件.tsv \
+    --sep '\t' \
+    --chunksize 100000
+
+# 无表头文件 + 指定列名
+uv run python scripts/convert_to_parquet.py ./data/无表头数据.tsv \
+    --sep '\t' \
+    --no-header \
+    --columns ./data/columns.txt
+
+# 批量转换目录
+uv run python scripts/convert_to_parquet.py ./data --batch
+```
+
+**关键参数**：
+
+| 参数 | 说明 |
+|------|------|
+| `--sep '\t'` | 指定分隔符（默认自动推断） |
+| `--no-header` | 文件无表头 |
+| `--columns <file>` | 列名文件（每行一个列名） |
+| `--chunksize 100000` | 流式处理分块大小（大文件必用） |
+| `--compression gzip` | 压缩算法（默认 snappy） |
+| `--batch` | 批量转换目录 |
+
+---
+
 ## 数据管道（推荐）
 
 推荐使用数据管道进行分步处理，每个步骤职责单一：
