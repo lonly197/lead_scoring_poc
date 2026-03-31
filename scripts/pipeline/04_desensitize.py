@@ -26,7 +26,14 @@ project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
 from src.pipeline.utils import print_step, format_size
-from src.pipeline.config import BRAND_MAPPING
+from src.pipeline.config import (
+    BRAND_MAPPING,
+    CAR_MODEL_MAPPING,
+    BRAND_TEXT_COLUMNS,
+    CAR_MODEL_COLUMNS,
+    ID_MASK_COLUMNS,
+    JSON_SENSITIVE_PATTERNS,
+)
 
 
 def log(msg: str = ""):
@@ -39,6 +46,7 @@ def desensitize_with_duckdb(
     input_path: Path,
     output_path: Path,
     brand_mapping: dict = None,
+    car_model_mapping: dict = None,
     memory_limit: str = "4GB",
     threads: int = 4,
 ) -> Path:
@@ -54,6 +62,7 @@ def desensitize_with_duckdb(
         input_path: 输入文件路径
         output_path: 输出文件路径
         brand_mapping: 品牌关键词映射
+        car_model_mapping: 车型名称映射
         memory_limit: DuckDB 内存限制
         threads: 线程数
 
@@ -64,6 +73,7 @@ def desensitize_with_duckdb(
 
     start_time = time.time()
     mapping = brand_mapping or BRAND_MAPPING
+    car_mapping = car_model_mapping or CAR_MODEL_MAPPING
 
     log("=" * 60)
     log("数据脱敏（DuckDB 优化版）")
@@ -99,17 +109,52 @@ def desensitize_with_duckdb(
             col_type = col_info[1]
             expr = f'"{col_name}"'
 
-            # 品牌关键词替换（字符串列）
-            if col_type == 'VARCHAR' or col_type == 'TEXT':
-                # 检查是否需要品牌替换（扩展检测范围）
-                brand_cols = ["车型", "渠道", "跟进", "战败", "品牌", "dmp_", "标签", "JSON"]
-                if any(kw in col_name for kw in brand_cols):
-                    for keyword, replacement in mapping.items():
-                        expr = f"regexp_replace({expr}, '{keyword}', '{replacement}', 'g')"
+            # === 处理整数类型的手机号列 ===
+            if col_type in ['BIGINT', 'INTEGER', 'INT'] and ('手机' in col_name or 'phone' in col_name.lower()):
+                # 保留前3后4位：189****1234
+                expr = f"""
+                    CASE
+                        WHEN LENGTH(CAST("{col_name}" AS VARCHAR)) = 11
+                        THEN CONCAT(
+                            LEFT(CAST("{col_name}" AS VARCHAR), 3),
+                            '****',
+                            RIGHT(CAST("{col_name}" AS VARCHAR), 4)
+                        )
+                        ELSE CAST("{col_name}" AS VARCHAR)
+                    END
+                """
+                if col_name not in desensitized_cols:
                     desensitized_cols.append(col_name)
 
-                # ID 字段掩码
-                if "客户ID" in col_name:
+            # 字符串列脱敏
+            if col_type == 'VARCHAR' or col_type == 'TEXT':
+                # === 1. 品牌关键词替换 ===
+                # 优先使用配置中的列名列表，再使用关键词匹配作为补充
+                needs_brand_replace = (
+                    col_name in BRAND_TEXT_COLUMNS or
+                    any(kw in col_name for kw in ["车型", "渠道", "跟进", "战败", "品牌", "dmp_", "标签", "JSON", "json", "销售", "经销", "店"])
+                )
+                if needs_brand_replace:
+                    for keyword, replacement in mapping.items():
+                        expr = f"regexp_replace({expr}, '{keyword}', '{replacement}', 'g')"
+                    if col_name not in desensitized_cols:
+                        desensitized_cols.append(col_name)
+
+                # === 2. 车型名称替换 ===
+                needs_car_replace = (
+                    col_name in CAR_MODEL_COLUMNS or
+                    "车型" in col_name or
+                    "意向" in col_name or
+                    "json" in col_name.lower()
+                )
+                if needs_car_replace:
+                    for keyword, replacement in car_mapping.items():
+                        expr = f"regexp_replace({expr}, '{keyword}', '{replacement}', 'g')"
+                    if col_name not in desensitized_cols:
+                        desensitized_cols.append(col_name)
+
+                # === 3. ID 字段掩码 ===
+                if col_name in ID_MASK_COLUMNS or "客户ID" in col_name:
                     # 保留前2后2位
                     expr = f"""
                         CASE
@@ -121,13 +166,52 @@ def desensitize_with_duckdb(
                             )
                         END
                     """
-                    desensitized_cols.append(col_name)
+                    if col_name not in desensitized_cols:
+                        desensitized_cols.append(col_name)
 
-                # 手机号脱敏（跟进记录等文本中）
+                # === 4. 手机号脱敏 ===
+                # 列名包含"手机"的字段，整体脱敏
+                if "手机" in col_name or "phone" in col_name.lower():
+                    # 保留前3后4位：189****1234
+                    expr = f"""
+                        CASE
+                            WHEN LENGTH(CAST("{col_name}" AS VARCHAR)) = 11
+                            THEN CONCAT(
+                                LEFT(CAST("{col_name}" AS VARCHAR), 3),
+                                '****',
+                                RIGHT(CAST("{col_name}" AS VARCHAR), 4)
+                            )
+                            ELSE CAST("{col_name}" AS VARCHAR)
+                        END
+                    """
+                    if col_name not in desensitized_cols:
+                        desensitized_cols.append(col_name)
+
+                # === 5. 文本中的手机号正则替换 ===
+                # 跟进记录、战败等文本中的手机号用简单掩码
                 if "跟进" in col_name or "战败" in col_name or "记录" in col_name:
-                    # 保留前3后4位：138****1234
-                    expr = f"regexp_replace({expr}, '1[3-9][0-9]{{9}}', CONCAT(LEFT('&', 3), '****', RIGHT('&', 4)), 'g')"
-                    desensitized_cols.append(col_name)
+                    # 将11位手机号替换为星号掩码（前3后4）
+                    # DuckDB 不支持复杂替换，使用分段匹配
+                    expr = f"regexp_replace({expr}, '(1[3-9][0-9])([0-9]{{4}})([0-9]{{4}})', '\\1****\\3', 'g')"
+                    if col_name not in desensitized_cols:
+                        desensitized_cols.append(col_name)
+
+                # === 6. 身份证号脱敏 ===
+                if "身份证" in col_name or "证件" in col_name:
+                    # 18位身份证保留前4后4位
+                    expr = f"""
+                        CASE
+                            WHEN LENGTH(CAST("{col_name}" AS VARCHAR)) >= 15
+                            THEN CONCAT(
+                                LEFT(CAST("{col_name}" AS VARCHAR), 4),
+                                '**********',
+                                RIGHT(CAST("{col_name}" AS VARCHAR), 4)
+                            )
+                            ELSE CAST("{col_name}" AS VARCHAR)
+                        END
+                    """
+                    if col_name not in desensitized_cols:
+                        desensitized_cols.append(col_name)
 
             select_exprs.append(f"{expr} AS \"{col_name}\"")
 
@@ -169,18 +253,26 @@ def desensitize_with_duckdb(
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="数据脱敏脚本 - 品牌关键词替换 + ID/手机号掩码（DuckDB 优化版）",
+        description="数据脱敏脚本 - 品牌关键词/车型替换 + ID/手机号/身份证掩码（DuckDB 优化版）",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 脱敏规则：
   品牌关键词:
     - 广汽丰田/广丰 → 品牌A
+    - 丰田 → 品牌B
     - 广汽 → 集团A
     - GTMC → 代号G
     - 广汽本地 → 区域A
 
+  车型名称:
+    - 钂智3X/钂智4X → 车型A/B
+    - 凯美瑞 → 车型D
+    - 汉兰达 → 车型E
+    - 其他车型按配置映射
+
   ID 字段: 保留前2后2位（如 AB****XY）
   手机号: 保留前3后4位（如 138****1234）
+  身份证: 保留前4后4位
 
 示例:
     uv run python scripts/pipeline/04_desensitize.py \\

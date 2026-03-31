@@ -47,6 +47,16 @@ project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
 from src.pipeline.utils import format_size
+from src.pipeline.config import (
+    BRAND_MAPPING,
+    CAR_MODEL_MAPPING,
+    BRAND_TEXT_COLUMNS,
+    CAR_MODEL_COLUMNS,
+    CITY_COLUMNS,
+    PROVINCE_COLUMNS,
+    DEALER_CODE_COLUMNS,
+    JSON_SENSITIVE_PATTERNS,
+)
 
 
 def log(msg: str = ""):
@@ -310,6 +320,153 @@ def remove_leakage_columns(
     return original_cols, new_cols
 
 
+def desensitize_data(
+    con,
+    input_path: Path,
+    output_path: Path,
+    compression: str = "zstd",
+) -> Tuple[int, int]:
+    """
+    数据脱敏处理
+
+    脱敏内容：
+    1. 品牌关键词替换：广汽丰田→品牌A, 广丰→品牌A, 广汽→集团A, GTMC→代号G, 丰田→品牌B
+    2. 车型名称替换：铂智3X→车型A 等
+    3. 城市名称脱敏：动态编号为城市A、城市B 等
+    4. 省份名称脱敏：动态编号为省份A、省份B 等
+    5. 经销店代码掩码：保留前2后2位
+    6. JSON 中敏感信息：车牌号、手机号等
+
+    Args:
+        con: DuckDB 连接
+        input_path: 输入文件路径
+        output_path: 输出文件路径
+        compression: 压缩算法
+
+    Returns:
+        (处理前敏感字段数, 处理后敏感字段数)
+    """
+    log("数据脱敏处理...")
+
+    con.execute(f"CREATE VIEW to_desensitize AS SELECT * FROM read_parquet('{input_path}')")
+
+    # 获取列信息
+    cols_info = con.execute("DESCRIBE to_desensitize").fetchall()
+    col_names = [col[0] for col in cols_info]
+    col_types = {col[0]: col[1] for col in cols_info}
+
+    # 1. 收集城市和省份的唯一值，生成映射
+    city_mapping = {}
+    province_mapping = {}
+
+    for col in CITY_COLUMNS:
+        if col in col_names:
+            cities = con.execute(f'SELECT DISTINCT "{col}" FROM to_desensitize WHERE "{col}" IS NOT NULL').fetchall()
+            for city_tuple in cities:
+                city = city_tuple[0]  # 从 tuple 中提取值
+                if city and city not in city_mapping:
+                    idx = len(city_mapping)
+                    # 生成城市A、城市B、...、城市Z、城市AA、城市AB 等
+                    if idx < 26:
+                        city_mapping[city] = f"城市{chr(65 + idx)}"
+                    else:
+                        city_mapping[city] = f"城市{chr(65 + idx // 26 - 1)}{chr(65 + idx % 26)}"
+
+    for col in PROVINCE_COLUMNS:
+        if col in col_names:
+            provinces = con.execute(f'SELECT DISTINCT "{col}" FROM to_desensitize WHERE "{col}" IS NOT NULL').fetchall()
+            for province_tuple in provinces:
+                province = province_tuple[0]  # 从 tuple 中提取值
+                if province and province not in province_mapping:
+                    idx = len(province_mapping)
+                    if idx < 26:
+                        province_mapping[province] = f"省份{chr(65 + idx)}"
+                    else:
+                        province_mapping[province] = f"省份{chr(65 + idx // 26 - 1)}{chr(65 + idx % 26)}"
+
+    log(f"  城市映射: {len(city_mapping)} 个")
+    log(f"  省份映射: {len(province_mapping)} 个")
+
+    # 2. 构建 SELECT 表达式
+    select_exprs = []
+    desensitized_count = 0
+
+    for col_name in col_names:
+        col_type = col_types[col_name]
+        expr = f'"{col_name}"'
+
+        # 只处理字符串类型
+        if col_type not in ('VARCHAR', 'TEXT'):
+            select_exprs.append(expr)
+            continue
+
+        # 品牌关键词替换（使用配置列表 BRAND_TEXT_COLUMNS）
+        if col_name in BRAND_TEXT_COLUMNS:
+            # 按长度降序排序，确保长的关键词先被替换
+            sorted_brands = sorted(BRAND_MAPPING.keys(), key=len, reverse=True)
+            for brand in sorted_brands:
+                replacement = BRAND_MAPPING[brand]
+                expr = f"regexp_replace({expr}, '{brand}', '{replacement}', 'g')"
+            desensitized_count += 1
+
+        # 车型名称替换（使用配置列表 CAR_MODEL_COLUMNS）
+        if col_name in CAR_MODEL_COLUMNS:
+            sorted_models = sorted(CAR_MODEL_MAPPING.keys(), key=len, reverse=True)
+            for model in sorted_models:
+                replacement = CAR_MODEL_MAPPING[model]
+                expr = f"regexp_replace({expr}, '{model}', '{replacement}', 'g')"
+            desensitized_count += 1
+
+        # 城市名称替换
+        if col_name in CITY_COLUMNS:
+            for city, code in sorted(city_mapping.items(), key=lambda x: len(x[0]), reverse=True):
+                expr = f"regexp_replace({expr}, '{city}', '{code}', 'g')"
+            desensitized_count += 1
+
+        # 省份名称替换
+        if col_name in PROVINCE_COLUMNS:
+            for province, code in sorted(province_mapping.items(), key=lambda x: len(x[0]), reverse=True):
+                expr = f"regexp_replace({expr}, '{province}', '{code}', 'g')"
+            desensitized_count += 1
+
+        # 经销店代码掩码
+        if col_name in DEALER_CODE_COLUMNS:
+            expr = f"""
+                CASE
+                    WHEN LENGTH("{col_name}") <= 4 THEN '****'
+                    ELSE CONCAT(LEFT("{col_name}", 2), '****', RIGHT("{col_name}", 2))
+                END
+            """
+            desensitized_count += 1
+
+        # JSON 字段中的敏感信息（车牌号、手机号等）
+        if "跟进" in col_name or "记录" in col_name or "json" in col_name.lower():
+            # 车牌号脱敏：赣ED89157 → 车牌***157
+            expr = f"regexp_replace({expr}, '[京津沪渝冀豫云辽黑湘皖鲁新苏浙赣鄂桂甘晋蒙陕吉闽贵粤青藏川宁琼使领][A-Z][A-Z0-9]{{5,6}}', '车牌***', 'g')"
+            # 手机号脱敏：13812345678 → 138****5678
+            expr = f"regexp_replace({expr}, '1[3-9][0-9]{{9}}', '手机***********', 'g')"
+            desensitized_count += 1
+
+        select_exprs.append(f"{expr} AS \"{col_name}\"")
+
+    log(f"  脱敏字段数: {desensitized_count}")
+
+    # 3. 执行脱敏并输出
+    select_sql = ", ".join(select_exprs)
+    con.execute(f"""
+        COPY (
+            SELECT {select_sql}
+            FROM to_desensitize
+        ) TO '{output_path}' (FORMAT PARQUET, COMPRESSION {compression.upper()})
+    """)
+
+    # 获取行数
+    row_count = con.execute(f"SELECT COUNT(*) FROM read_parquet('{output_path}')").fetchone()[0]
+    log(f"  输出数据: {row_count:,} 行")
+
+    return desensitized_count, len(col_names)
+
+
 def split_data_oot(
     con,
     input_path: Path,
@@ -506,7 +663,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--step",
-        choices=["all", "filter", "labels", "clean", "split"],
+        choices=["all", "filter", "labels", "clean", "desensitize", "split"],
         default="all",
         help="执行步骤（默认: all）"
     )
@@ -514,6 +671,11 @@ def main() -> int:
         "--keep-order-time",
         action="store_true",
         help="保留下订时间列（用于后续分析，训练时需手动排除）"
+    )
+    parser.add_argument(
+        "--no-desensitize",
+        action="store_true",
+        help="跳过脱敏步骤（默认执行脱敏）"
     )
     parser.add_argument(
         "--memory-limit",
@@ -603,10 +765,30 @@ def main() -> int:
                 con, labeled_path, cleaned_path, keep_cols, args.compression
             )
 
-        # 4. 数据拆分
-        if args.step in ["all", "split"]:
+        # 3.5. 数据脱敏
+        desensitized_path = temp_dir / "desensitized.parquet"
+        if args.step in ["all", "desensitize"]:
             if not cleaned_path.exists():
                 log(f"❌ 中间文件不存在，请先执行 clean 步骤")
+                return 1
+
+            # 检查是否需要脱敏
+            if not args.no_desensitize:
+                desensitized_count, total_cols = desensitize_data(
+                    con, cleaned_path, desensitized_path, args.compression
+                )
+                # 后续使用脱敏后的数据
+                final_data_path = desensitized_path
+            else:
+                log("跳过脱敏步骤 (--no-desensitize)")
+                final_data_path = cleaned_path
+        else:
+            final_data_path = cleaned_path
+
+        # 4. 数据拆分
+        if args.step in ["all", "split"]:
+            if not final_data_path.exists():
+                log(f"❌ 中间文件不存在，请先执行 clean/desensitize 步骤")
                 return 1
 
             if args.split_mode == "oot":
@@ -616,7 +798,7 @@ def main() -> int:
                 else:
                     time_stats = con.execute(f"""
                         SELECT MIN("{args.time_column}"), MAX("{args.time_column}")
-                        FROM read_parquet('{cleaned_path}')
+                        FROM read_parquet('{final_data_path}')
                         WHERE "{args.time_column}" IS NOT NULL
                     """).fetchone()
                     from datetime import timedelta
@@ -631,20 +813,20 @@ def main() -> int:
                     log(f"自动计算切分点: {cutoff}")
 
                 train_rows, test_rows = split_data_oot(
-                    con, cleaned_path, train_path, test_path,
+                    con, final_data_path, train_path, test_path,
                     args.time_column, cutoff, args.compression
                 )
 
             elif args.split_mode == "random":
                 train_rows, test_rows = split_data_random(
-                    con, cleaned_path, train_path, test_path,
+                    con, final_data_path, train_path, test_path,
                     args.target, args.ratio, args.compression
                 )
 
             else:  # none
                 # 仅复制文件
                 import shutil
-                shutil.copy(cleaned_path, train_path)
+                shutil.copy(final_data_path, train_path)
                 train_rows = con.execute(f"SELECT COUNT(*) FROM read_parquet('{train_path}')").fetchone()[0]
                 test_rows = 0
 
