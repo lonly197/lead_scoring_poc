@@ -139,6 +139,18 @@ def parse_args():
         default=None,
         help="指定训练的模型类型（逗号分隔），如 CAT,GBM。空值使用默认预设所有模型",
     )
+    parser.add_argument(
+        "--num-bag-folds",
+        type=int,
+        default=None,
+        help="Bagging folds 数量（None=使用预设默认值，1=禁用 bagging）",
+    )
+    parser.add_argument(
+        "--num-stack-levels",
+        type=int,
+        default=None,
+        help="Stacking 层数（None=使用预设默认值，0=禁用 stacking）",
+    )
 
     return parser.parse_args()
 
@@ -201,6 +213,12 @@ def main():
         logger.info(f"数据路径: {data_path}")
     logger.info(f"目标变量: {target_label}")
     logger.info(f"输出目录: {output_dir}")
+    if args.included_model_types:
+        logger.info(f"指定模型类型: {args.included_model_types}")
+    if args.num_bag_folds is not None:
+        logger.info(f"Bagging folds: {args.num_bag_folds}")
+    if args.num_stack_levels is not None:
+        logger.info(f"Stacking层数: {args.num_stack_levels}")
 
     # 磁盘空间检查
     required_gb = get_preset_disk_requirement(args.preset)
@@ -304,6 +322,8 @@ def main():
             excluded_model_types=excluded_model_types,
             num_folds_parallel=args.num_folds_parallel,
             included_model_types=included_model_types,
+            num_bag_folds=args.num_bag_folds,
+            num_stack_levels=args.num_stack_levels,
         )
         logger.info("启用类别权重自动平衡 (sample_weight='balance_weight')")
 
