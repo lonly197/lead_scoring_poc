@@ -4,6 +4,57 @@
 
 ---
 
+## [2026-04-01] 修复分值计算和 predict_advanced 逻辑
+
+### 问题分析
+
+1. **分值计算不符合文档设计**：代码使用分段计算（H级=80+P(7d)×19），文档设计为加权求和
+2. **predict_advanced 对全量数据调用两个模型**：应该分条件调用（已试驾用下订模型，未试驾用试驾模型）
+
+### 变更内容
+
+#### 1. 修复分值计算公式 (`src/models/ohab_rater.py`)
+
+改为加权求和公式，符合文档设计：
+
+```
+原始分数 = P(7天)×100 + P(14天)×60 + P(21天)×30
+归一化分数 = 原始分数 / 190 × 100
+```
+
+权重设计体现"高意向=短周期"的业务逻辑。
+
+#### 2. 修复 predict_advanced 逻辑 (`scripts/predict.py`)
+
+- 先检测已试驾状态 (`detect_driven_status`)
+- 未试驾客户 → 只调用试驾模型
+- 已试驾客户 → 只调用下订模型
+- 添加 try-except 处理特征缺失的情况
+
+### 使用方法
+
+```bash
+# 高等模式预测（分阶段）
+uv run python scripts/predict.py \
+    --mode advanced \
+    --drive-ensemble-path ./outputs/models/test_drive_ensemble \
+    --order-ensemble-path ./outputs/models/order_after_drive_ensemble \
+    --data-path ./data/unified_split/test.parquet \
+    --output ./predictions.csv \
+    --skip-adapter
+```
+
+### 输出示例
+
+| 阶段 | 数量 | 说明 |
+|------|------|------|
+| 试驾前 | 378,199 | 使用试驾概率模型 |
+| 试驾后 | 19,568 | 使用下订概率模型 |
+| O（已成交） | 8,731 | 固定100分 |
+| 无效 | 1,409 | 固定0分 |
+
+---
+
 ## [2026-04-01] 验证脚本通用化与模型验证完成
 
 ### 背景

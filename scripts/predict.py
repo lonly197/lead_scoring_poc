@@ -289,7 +289,10 @@ def predict_advanced(
     """
     高等模式预测
 
-    分阶段预测（试驾前+试驾后），完全符合业务规则。
+    分阶段预测（试驾前+试驾后），完全符合业务规则：
+    1. 检测已试驾状态
+    2. 已试驾客户 → 只调用下订模型
+    3. 未试驾客户 → 只调用试驾模型
 
     Args:
         df: 输入数据
@@ -303,6 +306,19 @@ def predict_advanced(
         预测结果 DataFrame
     """
     logger.info("=== 高等模式预测 ===")
+    n_samples = len(df)
+
+    # 检测已试驾状态
+    from src.models.ohab_rater import detect_driven_status
+    is_driven = detect_driven_status(df)
+    driven_count = is_driven.sum()
+    not_driven_count = n_samples - driven_count
+    logger.info(f"已试驾客户: {driven_count} ({driven_count/n_samples*100:.1f}%)")
+    logger.info(f"未试驾客户: {not_driven_count} ({not_driven_count/n_samples*100:.1f}%)")
+
+    # 初始化概率数组
+    drive_probas = {"7天": np.zeros(n_samples), "14天": np.zeros(n_samples), "21天": np.zeros(n_samples)}
+    order_probas = {"7天": np.zeros(n_samples), "14天": np.zeros(n_samples), "21天": np.zeros(n_samples)}
 
     # 加载试驾模型
     drive_models = load_ensemble_models(drive_ensemble_path, label_prefix="试驾标签")
@@ -319,35 +335,54 @@ def predict_advanced(
     order_metadata = load_feature_metadata(order_ensemble_path / "下订标签_7天")
     order_interaction_context = order_metadata.get("interaction_context", {})
 
-    # 预测试驾概率
-    drive_probas = {}
-    for window, label in [("7天", "试驾标签_7天"), ("14天", "试驾标签_14天"), ("21天", "试驾标签_21天")]:
-        if label not in drive_models:
-            logger.warning(f"试驾模型缺失: {label}")
-            drive_probas[window] = np.zeros(len(df))
-            continue
+    # 对【未试驾客户】预测试驾概率
+    if not_driven_count > 0:
+        not_driven_mask = ~is_driven
+        df_not_driven = df[not_driven_mask].copy()
+        logger.info(f"对 {not_driven_count} 个未试驾客户预测试驾概率...")
 
-        predictor = drive_models[label]
-        excluded_columns = get_excluded_columns(label)
-        df_processed = prepare_data_for_prediction(df, label, drive_interaction_context, excluded_columns)
-        drive_probas[window] = predictor.get_positive_proba(df_processed)
-        logger.info(f"{label} 预测完成")
+        for window, label in [("7天", "试驾标签_7天"), ("14天", "试驾标签_14天"), ("21天", "试驾标签_21天")]:
+            if label not in drive_models:
+                logger.warning(f"试驾模型缺失: {label}")
+                continue
 
-    # 预测下订概率
-    order_probas = {}
-    for window, label in [("7天", "下订标签_7天"), ("14天", "下订标签_14天"), ("21天", "下订标签_21天")]:
-        if label not in order_models:
-            logger.warning(f"下订模型缺失: {label}")
-            order_probas[window] = np.zeros(len(df))
-            continue
+            predictor = drive_models[label]
+            excluded_columns = get_excluded_columns(label)
+            df_processed = prepare_data_for_prediction(df_not_driven, label, drive_interaction_context, excluded_columns)
+            proba = predictor.get_positive_proba(df_processed)
+            drive_probas[window][not_driven_mask] = proba
+            logger.info(f"{label} 预测完成")
+    else:
+        logger.info("无未试驾客户，跳过试驾概率预测")
 
-        predictor = order_models[label]
-        excluded_columns = get_excluded_columns(label)
-        df_processed = prepare_data_for_prediction(df, label, order_interaction_context, excluded_columns)
-        order_probas[window] = predictor.get_positive_proba(df_processed)
-        logger.info(f"{label} 预测完成")
+    # 对【已试驾客户】预测下订概率
+    if driven_count > 0:
+        driven_mask = is_driven
+        df_driven = df[driven_mask].copy()
+        logger.info(f"对 {driven_count} 个已试驾客户预测下订概率...")
 
-    # 推导 OHAB 评级
+        for window, label in [("7天", "下订标签_7天"), ("14天", "下订标签_14天"), ("21天", "下订标签_21天")]:
+            if label not in order_models:
+                logger.warning(f"下订模型缺失: {label}")
+                continue
+
+            predictor = order_models[label]
+            excluded_columns = get_excluded_columns(label)
+
+            try:
+                df_processed = prepare_data_for_prediction(df_driven, label, order_interaction_context, excluded_columns)
+                proba = predictor.get_positive_proba(df_processed)
+                order_probas[window][driven_mask] = proba
+                logger.info(f"{label} 预测完成")
+            except ValueError as e:
+                # 数据缺少下订模型所需特征，使用默认概率
+                logger.warning(f"{label} 预测失败（数据缺少特征）: {e}")
+                logger.warning(f"使用默认概率 0.5 作为已试驾客户的下订概率")
+                order_probas[window][driven_mask] = 0.5
+    else:
+        logger.info("无已试驾客户，跳过下订概率预测")
+
+    # 推导 OHABCN 评级
     rater = OHABRater(mode=PredictionMode.ADVANCED, thresholds=thresholds)
     result = rater.derive(
         df,

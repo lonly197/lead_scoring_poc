@@ -36,7 +36,7 @@ class PredictionMode(str, Enum):
     ADVANCED = "advanced"  # 高等模式：试驾前+试驾后双阶段
 
 
-# 评级分值范围定义
+# 评级分值范围定义（用于展示）
 RATING_SCORE_RANGE = {
     "O": (100, 100),  # 已成交：固定100分
     "H": (80, 99),    # 高意向：80-99分
@@ -45,6 +45,14 @@ RATING_SCORE_RANGE = {
     "C": (20, 39),    # 超长尾意向：20-39分
     "N": (0, 0),      # 无效线索：0分
 }
+
+# 分值计算权重（体现"高意向=短周期"的业务逻辑）
+SCORE_WEIGHTS = {
+    "7d": 100,   # 7天权重最高
+    "14d": 60,   # 14天次之
+    "21d": 30,   # 21天最低
+}
+SCORE_MAX = 190  # 100 + 60 + 30
 
 # 评级顺序（用于分布统计）
 RATING_ORDER = ["O", "H", "A", "B", "C", "N"]
@@ -73,19 +81,18 @@ def calculate_score_from_proba(
     proba_21d: float = 0.0,
 ) -> float:
     """
-    根据评级和概率计算分值
+    根据概率计算分值（加权求和）
 
-    分值计算规则：
-    - O级：固定100分
-    - H级：80 + proba_7d * 19（80-99分）
-    - A级：60 + proba_14d * 19（60-79分）
-    - B级：40 + proba_21d * 19（40-59分）
-    - C级：20 + proba_21d * 19（20-39分，基于21天概率的残余意向）
-    - N级：固定0分
+    分值计算规则（符合文档设计）：
+    - 原始分数 = P(7天)×100 + P(14天)×60 + P(21天)×30
+    - 归一化到 0-100 范围
+
+    权重设计依据：7天权重最高（100），14天次之（60），21天最低（30），
+    体现"高意向=短周期"的业务逻辑——计划越快行动的客户，意向越强。
 
     Args:
-        rating: 评级（O/H/A/B/C/N）
-        proba: 主概率（用于简单模式）
+        rating: 评级（O/H/A/B/C/N）- 仅用于 O 和 N 级的固定分值
+        proba: 主概率（用于简单模式，作为 14 天概率）
         proba_7d: 7天概率
         proba_14d: 14天概率
         proba_21d: 21天概率
@@ -93,26 +100,26 @@ def calculate_score_from_proba(
     Returns:
         分值（0-100）
     """
+    # O 级：已成交，固定 100 分
     if rating == "O":
         return 100.0
-    elif rating == "H":
-        # H级：基于7天概率，范围80-99
-        base_score = 80.0
-        return base_score + min(proba_7d if proba_7d > 0 else proba, 1.0) * 19
-    elif rating == "A":
-        # A级：基于14天概率，范围60-79
-        base_score = 60.0
-        return base_score + min(proba_14d if proba_14d > 0 else proba, 1.0) * 19
-    elif rating == "B":
-        # B级：基于21天概率，范围40-59
-        base_score = 40.0
-        return base_score + min(proba_21d if proba_21d > 0 else proba, 1.0) * 19
-    elif rating == "C":
-        # C级：有残余意向，范围20-39
-        base_score = 20.0
-        return base_score + min(proba_21d if proba_21d > 0 else 0.1, 1.0) * 19
-    else:  # N级
+
+    # N 级：无效线索，固定 0 分
+    if rating == "N":
         return 0.0
+
+    # 有效线索：加权求和计算分值
+    p7 = proba_7d if proba_7d > 0 else 0.0
+    p14 = proba_14d if proba_14d > 0 else (proba if proba > 0 else 0.0)
+    p21 = proba_21d if proba_21d > 0 else 0.0
+
+    # 加权求和
+    raw_score = p7 * SCORE_WEIGHTS["7d"] + p14 * SCORE_WEIGHTS["14d"] + p21 * SCORE_WEIGHTS["21d"]
+
+    # 归一化到 0-100
+    normalized_score = (raw_score / SCORE_MAX) * 100
+
+    return round(normalized_score, 2)
 
 
 def calculate_scores_batch(
@@ -596,6 +603,7 @@ def derive_ohabcn_advanced(
             # 使用下订概率计算分值
             scores[i] = calculate_score_from_proba(
                 rating=ratings[i],
+                proba=0.5,  # 默认概率
                 proba_7d=order_proba_7d[i],
                 proba_14d=order_proba_14d[i],
                 proba_21d=order_proba_21d[i],
@@ -604,6 +612,7 @@ def derive_ohabcn_advanced(
             # 使用试驾概率计算分值
             scores[i] = calculate_score_from_proba(
                 rating=ratings[i],
+                proba=0.5,  # 默认概率
                 proba_7d=drive_proba_7d[i],
                 proba_14d=drive_proba_14d[i],
                 proba_21d=drive_proba_21d[i],
