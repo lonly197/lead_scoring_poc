@@ -13,6 +13,7 @@ scripts/
 │   ├── 03_clean.py     # 数据清洗
 │   ├── 04_desensitize.py # 数据脱敏
 │   ├── 05_split.py     # 数据拆分
+│   ├── 06_split_unified.py # 统一数据拆分（试驾+下订）
 │   ├── excel_to_csv.py   # Excel→CSV（xlsx2csv）
 │   ├── excel_to_parquet.py # Excel→Parquet（流式）
 │   └── merge_parquet.py   # Parquet 合并（DuckDB）
@@ -129,6 +130,32 @@ uv run python scripts/pipeline/05_split.py \
     --target 线索评级结果
 ```
 
+### 06_split_unified.py - 统一数据拆分（推荐）
+
+从单一数据源生成试驾预测和下订预测的训练/测试集，确保数据切分一致。
+
+**输出文件**：
+- `train.parquet` / `test.parquet` - 全量线索，用于试驾预测
+- `train_driven.parquet` / `test_driven.parquet` - 已试驾子集，用于下订预测
+
+```bash
+uv run python scripts/pipeline/06_split_unified.py \
+    --input ./data/线索宽表_合并_补充试驾.parquet \
+    --output ./data/unified_split \
+    --time-column 线索创建时间 \
+    --cutoff 2026-03-01
+```
+
+**数据架构**：
+```
+线索宽表_合并_补充试驾.parquet (1,199,453 行)
+    ↓ OOT 时间切分（2026-03-01）
+    ├── train.parquet (791,546 行) → 试驾预测训练
+    ├── test.parquet (407,907 行) → 试驾预测测试
+    ├── train_driven.parquet (47,413 行) → 下订预测训练
+    └── test_driven.parquet (22,067 行) → 下订预测测试
+```
+
 ---
 
 ## 大文件处理脚本
@@ -226,10 +253,11 @@ uv run python scripts/train_model.py test_drive --daemon \
 
 | 脚本 | 目标变量 | 说明 |
 |------|----------|------|
-| `train_test_drive.py` | 试驾标签 | 核心任务：试驾预测 |
-| `train_ohab.py` | 线索评级结果 | HAB 评级 |
-| `train_arrive.py` | 到店标签 | 到店预测 |
-| `train_test_drive_ensemble.py` | 多标签 | 三模型集成 |
+| `train_test_drive_ensemble.py` | 试驾标签_7/14/21天 | **核心**：试驾预测三模型集成 |
+| `train_order_after_drive.py` | 下订标签_7/14/21天 | **核心**：下订预测三模型集成 |
+| `train_test_drive.py` | 试驾标签 | 辅助：单模型试驾预测 |
+| `train_ohab.py` | 线索评级结果 | 辅助：HAB 评级 |
+| `train_arrive.py` | 到店标签 | 辅助：到店预测 |
 
 ---
 

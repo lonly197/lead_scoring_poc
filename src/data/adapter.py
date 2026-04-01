@@ -230,6 +230,7 @@ def calculate_target_labels(df: pd.DataFrame) -> pd.DataFrame:
     create_time = pd.to_datetime(df.get("线索创建时间"), errors='coerce')
     arrive_time = pd.to_datetime(df.get("到店时间"), errors='coerce')
     drive_time = pd.to_datetime(df.get("试驾时间"), errors='coerce')
+    order_time = pd.to_datetime(df.get("下订时间"), errors='coerce')
 
     # 计算到店标签
     if arrive_time.notna().any():
@@ -270,6 +271,41 @@ def calculate_target_labels(df: pd.DataFrame) -> pd.DataFrame:
     else:
         df["成交标签"] = 0
         df["is_final_ordered"] = 0
+
+    # 计算下订标签（试驾后下订商谈阶段）
+    # 只对已试驾的线索计算下订时间窗口标签
+    if "试驾时间" in df.columns and "下订时间" in df.columns:
+        driven_mask = drive_time.notna()
+
+        # 初始化下订标签列（默认为 0）
+        df["下订标签_7天"] = 0
+        df["下订标签_14天"] = 0
+        df["下订标签_21天"] = 0
+
+        # 对已试驾且已下订的线索计算天数差
+        ordered_after_drive = driven_mask & order_time.notna()
+        if ordered_after_drive.any():
+            order_after_drive_days = (order_time - drive_time).dt.total_seconds() / 86400
+
+            # 试驾后 7/14/21 天内下订
+            df.loc[ordered_after_drive, "下订标签_7天"] = (
+                (order_after_drive_days[ordered_after_drive] >= 0) &
+                (order_after_drive_days[ordered_after_drive] <= 7)
+            ).astype(int)
+
+            df.loc[ordered_after_drive, "下订标签_14天"] = (
+                (order_after_drive_days[ordered_after_drive] >= 0) &
+                (order_after_drive_days[ordered_after_drive] <= 14)
+            ).astype(int)
+
+            df.loc[ordered_after_drive, "下订标签_21天"] = (
+                (order_after_drive_days[ordered_after_drive] >= 0) &
+                (order_after_drive_days[ordered_after_drive] <= 21)
+            ).astype(int)
+
+            # 保存试驾后下订天数差（用于分析）
+            df["试驾后下订天数差"] = np.nan
+            df.loc[ordered_after_drive, "试驾后下订天数差"] = order_after_drive_days[ordered_after_drive]
 
     return df
 

@@ -3,35 +3,43 @@
 模型预测脚本
 
 对输入数据进行预测，将预测结果追加到 DataFrame 中返回。
-支持 OHAB 评级推导：O 级（已成交）/ H 级 / A 级 / B 级 / N 级。
+支持 OHABCN 评级推导：
+- O 级：已成交（100分）
+- H 级：7天内试驾/下订（80-99分，高意向）
+- A 级：14天内试驾/下订（60-79分，中意向）
+- B 级：21天内试驾/下订（40-59分，低意向）
+- C 级：有意向但超过21天（20-39分，超长尾意向）
+- N 级：无效线索（0分，无电话、已购买竞品、明确拒绝等）
 
 三种预测模式：
-- simple: 简单模式，使用单模型（14天试驾概率）推断 OHAB
-- medium: 中等模式，使用三模型集成（7/14/21天试驾概率）推断 OHAB
+- simple: 简单模式，使用单模型（14天试驾概率）推断评级
+- medium: 中等模式，使用三模型集成（7/14/21天试驾概率）推断评级
 - advanced: 高等模式，分阶段预测（试驾前+试驾后），完全符合业务规则
 
 使用方法：
     # 简单模式（默认）
     uv run python scripts/predict.py \
         --model-path ./outputs/models/test_drive_model \
-        --data-path ./data/final_v4_test.parquet \
+        --data-path ./data/unified_split/test.parquet \
         --output ./predictions.csv \
         --mode simple
 
-    # 中等模式
+    # 中等模式（推荐）
     uv run python scripts/predict.py \
         --ensemble-path ./outputs/models/test_drive_ensemble \
-        --data-path ./data/final_v4_test.parquet \
+        --data-path ./data/unified_split/test.parquet \
         --output ./predictions.csv \
-        --mode medium
+        --mode medium \
+        --include-ohab
 
     # 高等模式
     uv run python scripts/predict.py \
         --drive-ensemble-path ./outputs/models/test_drive_ensemble \
         --order-ensemble-path ./outputs/models/order_after_drive_ensemble \
-        --data-path ./data/final_v4_test.parquet \
+        --data-path ./data/unified_split/test.parquet \
         --output ./predictions.csv \
-        --mode advanced
+        --mode advanced \
+        --include-ohab
 """
 
 from __future__ import annotations

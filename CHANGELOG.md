@@ -4,6 +4,99 @@
 
 ---
 
+## [2026-04-01] 统一数据源方案与 OHABCN 评级体系
+
+### 背景
+
+原先试驾预测和下订预测使用不同的数据文件：
+- 试驾预测：`final_v4_train.parquet` / `final_v4_test.parquet`
+- 下订预测：`order_after_drive_v2_train.parquet` / `order_after_drive_v2_test.parquet`
+
+这导致数据切分不一致、特征命名不统一、维护成本高。
+
+### 变更内容
+
+#### 1. 新增统一数据分割脚本 (`scripts/pipeline/06_split_unified.py`)
+
+从 `线索宽表_合并_补充试驾.parquet` 生成一致的训练/测试集：
+
+```
+统一数据源
+    ↓ OOT 时间切分（2026-03-01）
+    ├── train.parquet (791,546 行) → 试驾预测训练
+    ├── test.parquet (407,907 行) → 试驾预测测试
+    ├── train_driven.parquet (47,413 行) → 下订预测训练（已试驾子集）
+    └── test_driven.parquet (22,067 行) → 下订预测测试（已试驾子集）
+```
+
+#### 2. 修复 JSON 特征提取列名冲突 (`src/data/json_extractor.py`)
+
+当 JSON 提取的特征名与现有列冲突时，自动添加 `_json` 后缀避免重复列名。
+
+#### 3. 更新训练脚本默认数据路径
+
+- `train_test_drive_ensemble.py`: 默认使用 `unified_split/train.parquet`
+- `train_order_after_drive.py`: 默认使用 `unified_split/train_driven.parquet`
+
+#### 4. 新增 OHABCN 评级体系 (`src/models/ohab_rater.py`)
+
+扩展原有的 OHAB 四级评级为 OHABCN 六级评级，并添加分值计算：
+
+| 评级 | 定义 | 分值范围 | 说明 |
+|------|------|---------|------|
+| O | 已成交 | 100分 | 已订车/已成交 |
+| H | 7天内试驾/下订 | 80-99分 | 高意向 |
+| A | 14天内试驾/下订 | 60-79分 | 中意向 |
+| B | 21天内试驾/下订 | 40-59分 | 低意向 |
+| C | 有意向但超过21天 | 20-39分 | 超长尾意向 |
+| N | 无效线索 | 0分 | 无电话/已购竞品/明确拒绝 |
+
+**新增功能**：
+- `detect_invalid_status()`: 检测无效线索（N级）
+- `calculate_score_from_proba()`: 基于概率计算分值
+- 分值连续计算：基础分 + 概率 × 区间宽度
+
+### 使用方式
+
+```bash
+# 生成统一分割数据
+uv run python scripts/pipeline/06_split_unified.py \
+    --input ./data/线索宽表_合并_补充试驾.parquet \
+    --output ./data/unified_split \
+    --time-column 线索创建时间 \
+    --cutoff 2026-03-01
+
+# 训练试驾预测模型
+uv run python scripts/run.py train ensemble --daemon --included-model-types CAT
+
+# 训练下订预测模型
+uv run python scripts/run.py train order_after_drive --daemon --included-model-types CAT
+
+# 预测并输出评级、分值
+uv run python scripts/predict.py \
+    --mode medium \
+    --ensemble-path ./outputs/models/test_drive_ensemble \
+    --data-path ./data/unified_split/test.parquet \
+    --output ./predictions.csv
+```
+
+### 预测输出
+
+| 列名 | 说明 |
+|------|------|
+| 评级 | O/H/A/B/C/N |
+| 阶段 | O/试驾前/试驾后/无效 |
+| 分值 | 0-100 连续分值 |
+| 试驾概率_7天/14天/21天 | 各时间窗口的试驾概率 |
+
+### 影响
+
+- 试驾预测和下订预测使用相同的数据切分，保证评估一致性
+- 简化数据管理，只需维护一份原始数据源
+- 评级体系更完善，覆盖更多业务场景（无效线索识别、超长尾意向）
+
+---
+
 ## [2026-03-30] 三模型集成训练与数据合并
 
 - 新增 `scripts/merge_data.py`：合并线索宽表 + DMP 行为数据

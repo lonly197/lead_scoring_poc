@@ -125,13 +125,13 @@ def parse_args():
     parser.add_argument(
         "--train-path",
         type=str,
-        default=None,
+        default="./data/unified_split/train.parquet",
         help="训练集文件路径（提前拆分模式，优先级高于 --data-path）",
     )
     parser.add_argument(
         "--test-path",
         type=str,
-        default=None,
+        default="./data/unified_split/test.parquet",
         help="测试集文件路径（提前拆分模式，优先级高于 --data-path）",
     )
     parser.add_argument(

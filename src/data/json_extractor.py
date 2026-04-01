@@ -183,6 +183,23 @@ def batch_extract_json_features(
     features_list = df[json_column].apply(extract_followup_features)
     features_df = pd.DataFrame(features_list.tolist(), index=df.index)
 
+    # 检查列名冲突，避免创建重复列
+    existing_cols = set(df.columns)
+    new_cols = {}
+    for col in features_df.columns:
+        if col in existing_cols:
+            # 使用 _json 后缀区分
+            new_col = f"{col}_json"
+            # 如果带后缀的列名也存在，跳过
+            if new_col not in existing_cols:
+                new_cols[col] = new_col
+                logger.debug(f"列名冲突: '{col}' 重命名为 '{new_col}'")
+        else:
+            new_cols[col] = col
+
+    # 重命名冲突列
+    features_df = features_df.rename(columns=new_cols)
+
     # 合并到原数据框
     result_df = pd.concat([df, features_df], axis=1)
 

@@ -11,8 +11,8 @@
 
 使用方法：
     uv run python scripts/train_order_after_drive.py \\
-        --train-path ./data/order_after_drive_v2_train.parquet \\
-        --test-path ./data/order_after_drive_v2_test.parquet \\
+        --train-path ./data/unified_split/train_driven.parquet \\
+        --test-path ./data/unified_split/test_driven.parquet \\
         --preset high_quality \\
         --included-model-types CAT
 """
@@ -129,13 +129,13 @@ def parse_args():
     parser.add_argument(
         "--train-path",
         type=str,
-        default="./data/order_after_drive_v2_train.parquet",
+        default="./data/unified_split/train_driven.parquet",
         help="训练集文件路径（提前拆分模式，优先级高于 --data-path）",
     )
     parser.add_argument(
         "--test-path",
         type=str,
-        default="./data/order_after_drive_v2_test.parquet",
+        default="./data/unified_split/test_driven.parquet",
         help="测试集文件路径（提前拆分模式，优先级高于 --data-path）",
     )
     parser.add_argument(
@@ -552,10 +552,11 @@ def main():
             logger.info("使用提前拆分的数据文件")
             output_dir.mkdir(parents=True, exist_ok=True)
 
-            # 直接使用 pandas 加载 Parquet（管道脚本已处理数据，无需 DataLoader 验证）
-            import pandas as pd
-            df_train = pd.read_parquet(train_path)
-            df_test = pd.read_parquet(test_path)
+            # 使用 DataLoader 加载（带 auto_adapt=True），确保列名标准化
+            train_loader = DataLoader(train_path, auto_adapt=True)
+            test_loader = DataLoader(test_path, auto_adapt=True)
+            df_train = train_loader.load()
+            df_test = test_loader.load()
 
             logger.info(f"训练集列数: {len(df_train.columns)}, 测试集列数: {len(df_test.columns)}")
 

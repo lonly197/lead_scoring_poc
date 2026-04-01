@@ -18,6 +18,49 @@ cp .env.example .env
 
 ---
 
+## 快速开始：统一数据源方案（推荐）
+
+### 1. 生成统一分割数据
+
+```bash
+# 从线索宽表生成训练/测试集
+uv run python scripts/pipeline/06_split_unified.py \
+    --input ./data/线索宽表_合并_补充试驾.parquet \
+    --output ./data/unified_split \
+    --time-column 线索创建时间 \
+    --cutoff 2026-03-01
+```
+
+**输出文件**：
+| 文件 | 用途 |
+|------|------|
+| `train.parquet` / `test.parquet` | 试驾预测（全量线索） |
+| `train_driven.parquet` / `test_driven.parquet` | 下订预测（已试驾子集） |
+
+### 2. 训练模型
+
+```bash
+# 试驾预测模型（三模型集成）
+uv run python scripts/run.py train ensemble --daemon --included-model-types CAT
+
+# 下订预测模型（三模型集成）
+uv run python scripts/run.py train order_after_drive --daemon --included-model-types CAT
+```
+
+### 3. 预测与评级
+
+```bash
+# 预测 + OHAB 评级
+uv run python scripts/predict.py \
+    --mode medium \
+    --ensemble-path ./outputs/models/test_drive_ensemble \
+    --data-path ./data/unified_split/test.parquet \
+    --output ./predictions.csv \
+    --include-ohab
+```
+
+---
+
 ## 一键闭环
 
 **前提**：已按 `.env.example` 配置好环境变量。
@@ -61,20 +104,11 @@ uv run python scripts/generate_business_report.py
 ### 训练模型
 
 ```bash
-# 动态拆分模式（默认）
-uv run python scripts/run.py train test_drive --daemon
+# 试驾预测模型（三模型集成，默认使用统一分割数据）
+uv run python scripts/run.py train ensemble --daemon --included-model-types CAT
 
-# 提前拆分模式
-uv run python scripts/run.py train test_drive --daemon \
-    --train-path ./data/train.parquet \
-    --test-path ./data/test.parquet
-
-# 仅训练 CatBoost（推荐）
-uv run python scripts/run.py train test_drive --daemon \
-    --included-model-types CAT
-
-# 三模型集成训练
-uv run python scripts/run.py train ensemble --daemon
+# 下订预测模型（三模型集成，默认使用统一分割数据）
+uv run python scripts/run.py train order_after_drive --daemon --included-model-types CAT
 
 # 三模型并行训练（32GB+ 服务器）
 uv run python scripts/run.py train ensemble --daemon --parallel --max-workers 3
@@ -111,43 +145,53 @@ uv run python scripts/run.py validate \
 uv run python scripts/predict.py \
     --mode simple \
     --model-path ./outputs/models/test_drive_model \
-    --data-path ./data/final_v4_test.parquet \
+    --data-path ./data/unified_split/test.parquet \
     --output ./predictions.csv
 
-# 中等模式：使用试驾三模型集成
+# 中等模式：使用试驾三模型集成（推荐）
 uv run python scripts/predict.py \
     --mode medium \
     --ensemble-path ./outputs/models/test_drive_ensemble \
-    --data-path ./data/final_v4_test.parquet \
-    --output ./predictions.csv
+    --data-path ./data/unified_split/test.parquet \
+    --output ./predictions.csv \
+    --include-ohab
 
 # 高等模式：双阶段预测（试驾+下订）
 uv run python scripts/predict.py \
     --mode advanced \
     --drive-ensemble-path ./outputs/models/test_drive_ensemble \
     --order-ensemble-path ./outputs/models/order_after_drive_ensemble \
-    --data-path ./data/final_v4_test.parquet \
-    --output ./predictions.csv
+    --data-path ./data/unified_split/test.parquet \
+    --output ./predictions.csv \
+    --include-ohab
 
 # 包含原始数据列
 uv run python scripts/predict.py \
     --mode medium \
     --ensemble-path ./outputs/models/test_drive_ensemble \
-    --data-path ./data/final_v4_test.parquet \
+    --data-path ./data/unified_split/test.parquet \
     --output ./predictions_full.csv \
     --include-original
 ```
 
-**OHAB 评级说明**：
-- **O 级**：已订车/已成交（自动检测数据中的成交字段）
-- **H 级**：7天内试驾/下订（高意向）
-- **A 级**：14天内试驾/下订（中意向）
-- **B 级**：21天内试驾/下订（低意向）
-- **N 级**：无意向
+**OHABCN 评级说明**：
+
+| 评级 | 定义 | 分值范围 | 说明 |
+|------|------|---------|------|
+| O | 已成交 | 100分 | 已订车/已成交 |
+| H | 7天内试驾/下订 | 80-99分 | 高意向 |
+| A | 14天内试驾/下订 | 60-79分 | 中意向 |
+| B | 21天内试驾/下订 | 40-59分 | 低意向 |
+| C | 有意向但超过21天 | 20-39分 | 超长尾意向 |
+| N | 无效线索 | 0分 | 无电话/已购竞品/明确拒绝 |
+
+**分值计算**：基础分 + 概率 × 区间宽度，输出连续分值（0-100）。
 
 **评级阶段**：
-- 试驾前邀约阶段：使用试驾概率模型
-- 试驾后下订商谈阶段：使用下订概率模型（仅 advanced 模式）
+- O：已成交（自动检测数据中的成交字段）
+- 试驾前：使用试驾概率模型
+- 试驾后：使用下订概率模型（仅 advanced 模式）
+- 无效：自动检测无效线索（N 级）
 
 ### 监控任务
 

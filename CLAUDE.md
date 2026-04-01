@@ -34,12 +34,13 @@ uv run python scripts/run.py train test_drive --daemon \
 # 常用训练命令
 # ====================
 
-# 仅训练 CatBoost（推荐）
-uv run python scripts/run.py train test_drive --daemon \
+# 试驾预测模型（三模型集成，默认使用统一分割数据）
+uv run python scripts/run.py train ensemble --daemon \
     --included-model-types CAT
 
-# 三模型集成训练
-uv run python scripts/run.py train ensemble --daemon
+# 下订预测模型（三模型集成，默认使用统一分割数据）
+uv run python scripts/run.py train order_after_drive --daemon \
+    --included-model-types CAT
 
 # 三模型并行训练（32GB+ 服务器）
 uv run python scripts/run.py train ensemble --daemon --parallel
@@ -50,21 +51,21 @@ uv run python scripts/run.py validate \
 
 # 预测（纯推理，无需标签）
 uv run python scripts/predict.py \
-    --model-path ./outputs/models/test_drive_model \
-    --data-path ./data/final_v4_test.parquet \
+    --model-path ./outputs/models/test_drive_ensemble \
+    --data-path ./data/unified_split/test.parquet \
     --output ./predictions.csv
 
 # 预测 + OHAB 评级（O/H/A/B/N）
 uv run python scripts/predict.py \
-    --model-path ./outputs/models/test_drive_model \
-    --data-path ./data/final_v4_test.parquet \
+    --model-path ./outputs/models/test_drive_ensemble \
+    --data-path ./data/unified_split/test.parquet \
     --output ./predictions.csv \
     --include-ohab
 
 # 预测（包含原始数据列）
 uv run python scripts/predict.py \
-    --model-path ./outputs/models/test_drive_model \
-    --data-path ./data/final_v4_test.parquet \
+    --model-path ./outputs/models/test_drive_ensemble \
+    --data-path ./data/unified_split/test.parquet \
     --output ./predictions_full.csv \
     --include-original
 
@@ -149,6 +150,44 @@ uv run python scripts/pipeline/run_pipeline.py \
 # 输出: final_train.parquet, final_test.parquet
 ```
 
+## 统一数据源方案（推荐）
+
+**从单一数据源生成试驾预测和下订预测的训练/测试集**，确保数据切分一致。
+
+```bash
+# 生成统一分割数据
+uv run python scripts/pipeline/06_split_unified.py \
+    --input ./data/线索宽表_合并_补充试驾.parquet \
+    --output ./data/unified_split \
+    --time-column 线索创建时间 \
+    --cutoff 2026-03-01
+
+# 输出文件:
+# - train.parquet / test.parquet         → 试驾预测用（全量线索）
+# - train_driven.parquet / test_driven.parquet → 下订预测用（已试驾子集）
+```
+
+**训练命令**（默认使用统一分割数据）：
+
+```bash
+# 试驾预测模型（7/14/21天三模型集成）
+uv run python scripts/run.py train ensemble --daemon --included-model-types CAT
+
+# 下订预测模型（7/14/21天三模型集成）
+uv run python scripts/run.py train order_after_drive --daemon --included-model-types CAT
+```
+
+**数据架构**：
+
+```
+线索宽表_合并_补充试驾.parquet (1,199,453 行)
+    ↓ OOT 时间切分（2026-03-01）
+    ├── train.parquet (791,546 行) → 试驾预测训练
+    ├── test.parquet (407,907 行) → 试驾预测测试
+    ├── train_driven.parquet (47,413 行) → 下订预测训练
+    └── test_driven.parquet (22,067 行) → 下订预测测试
+```
+
 ## 数据管道架构
 
 ```
@@ -158,12 +197,20 @@ scripts/pipeline/
 ├── 03_clean.py        # 数据清洗（异常值、偏斜、高基数）
 ├── 04_desensitize.py  # 数据脱敏（品牌、ID、手机号）
 ├── 05_split.py        # 数据拆分（random/oot/auto）
+├── 06_split_unified.py # 统一数据拆分（试驾+下订共用）
 └── run_pipeline.py    # 统一运行器
 ```
 
 **管道流程**：
 ```
 Excel + DMP → merged.parquet → profile.md → cleaned.parquet → desensitized.parquet → train/test.parquet
+```
+
+**统一数据源流程**：
+```
+线索宽表_合并_补充试驾.parquet → unified_split/
+                                  ├── train.parquet / test.parquet（试驾预测）
+                                  └── train_driven.parquet / test_driven.parquet（下订预测）
 ```
 
 ## 入口架构
@@ -174,7 +221,8 @@ run.py (一级入口)
 │   ├── arrive       → train_arrive.py
 │   ├── test_drive   → train_test_drive.py
 │   ├── ohab         → train_ohab.py
-│   └── ensemble     → train_test_drive_ensemble.py
+│   ├── ensemble     → train_test_drive_ensemble.py  # 试驾预测（三模型）
+│   └── order_after_drive → train_order_after_drive.py  # 下订预测（三模型）
 └── validate         → validate_model.py (二级入口)
     ├── arrive       → validate_arrive_model.py
     ├── test_drive   → validate_test_drive_model.py
@@ -211,10 +259,11 @@ MODEL_INCLUDED_TYPES=CAT
 ### 训练脚本优先级
 
 ```
-train_test_drive.py      → 核心任务（到店预测）
-train_test_drive_ensemble.py → 三模型集成（7/14/21天试驾预测）
-train_ohab.py            → 辅助任务（OHAB 评级）
-train_arrive.py          → 辅助任务（到店预测）
+train_test_drive_ensemble.py  → 核心任务（试驾预测三模型集成）
+train_order_after_drive.py    → 核心任务（下订预测三模型集成）
+train_test_drive.py           → 辅助任务（单模型试驾预测）
+train_ohab.py                 → 辅助任务（OHAB 评级）
+train_arrive.py               → 辅助任务（到店预测）
 ```
 
 ## 数据格式适配
@@ -230,6 +279,17 @@ train_arrive.py          → 辅助任务（到店预测）
 关键代码：`src/data/adapter.py` 定义了格式检测和列映射。修改时注意：
 - `线索创建时间` 在新格式索引 4
 - `线索评级结果`（OHAB）在新格式索引 26
+
+**目标标签自动计算**（`adapter.calculate_target_labels()`）：
+
+| 标签 | 计算逻辑 | 用途 |
+|------|---------|------|
+| `试驾标签_7天` | 试驾时间 - 线索创建时间 ≤ 7天 | 试驾预测 |
+| `试驾标签_14天` | 试驾时间 - 线索创建时间 ≤ 14天 | 试驾预测 |
+| `试驾标签_21天` | 试驾时间 - 线索创建时间 ≤ 21天 | 试驾预测 |
+| `下订标签_7天` | 下订时间 - 试驾时间 ≤ 7天 | 下订预测 |
+| `下订标签_14天` | 下订时间 - 试驾时间 ≤ 14天 | 下订预测 |
+| `下订标签_21天` | 下订时间 - 试驾时间 ≤ 21天 | 下订预测 |
 
 ## DuckDB 加速（大文件优化）
 
@@ -320,9 +380,11 @@ train_df, valid_df, test_df, metadata = split_data_oot_three_way_duckdb(
 | `scripts/predict.py` | 模型预测：纯推理，无需标签 |
 | `scripts/convert_to_parquet.py` | 数据格式转换：CSV/TSV → Parquet |
 | `scripts/merge_data.py` | 数据合并：线索宽表 + DMP 行为 |
+| `scripts/pipeline/06_split_unified.py` | 统一数据拆分：试驾+下订共用 |
 | `config/config.py` | 配置管理：ID 列、泄漏字段、特征定义 |
 | `src/data/adapter.py` | 数据格式适配：列映射、目标变量计算 |
 | `src/data/loader.py` | 数据加载：特征工程、OOT 时间切分 |
+| `src/data/json_extractor.py` | JSON 特征提取：跟进详情解析 |
 | `src/models/predictor.py` | 模型封装：训练、清理 |
 | `src/inference/hab_deriver.py` | HAB 推导逻辑（三模型模式） |
 
