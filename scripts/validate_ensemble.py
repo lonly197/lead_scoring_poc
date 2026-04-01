@@ -80,16 +80,28 @@ def parse_args():
         default=None,
         help="日志文件路径",
     )
+    parser.add_argument(
+        "--label-prefix",
+        type=str,
+        default="试驾标签",
+        help="标签前缀（试驾标签 或 下订标签）",
+    )
+    parser.add_argument(
+        "--skip-adapter",
+        action="store_true",
+        help="跳过数据适配器，直接加载 Parquet 文件（用于兼容旧格式数据）",
+    )
 
     return parser.parse_args()
 
 
-def load_models(model_dir: Path) -> Dict[str, LeadScoringPredictor]:
+def load_models(model_dir: Path, label_prefix: str = "试驾标签") -> Dict[str, LeadScoringPredictor]:
     """
     加载三个时间窗口的模型
 
     Args:
         model_dir: 模型目录
+        label_prefix: 标签前缀（试驾标签 或 下订标签）
 
     Returns:
         Dict[str, LeadScoringPredictor] 模型字典
@@ -97,7 +109,7 @@ def load_models(model_dir: Path) -> Dict[str, LeadScoringPredictor]:
     models = {}
 
     for window in TIME_WINDOWS:
-        target = f"试驾标签_{window}"
+        target = f"{label_prefix}_{window}"
         model_path = model_dir / target
 
         if not model_path.exists():
@@ -353,8 +365,13 @@ def main():
     try:
         # 1. 加载数据
         logger.info("步骤 1/5: 加载数据")
-        loader = DataLoader(actual_data_path, auto_adapt=True)
-        df = loader.load()
+        if args.skip_adapter and actual_data_path.endswith('.parquet'):
+            # 直接加载 Parquet 文件，跳过适配器
+            df = pd.read_parquet(actual_data_path)
+            logger.info(f"直接加载 Parquet（跳过适配器）: {len(df)} 行")
+        else:
+            loader = DataLoader(actual_data_path, auto_adapt=True)
+            df = loader.load()
         logger.info(f"数据: {len(df)} 行")
 
         # 2. 特征工程
@@ -367,17 +384,18 @@ def main():
 
         # 3. 加载模型
         logger.info("步骤 3/5: 加载模型")
-        models = load_models(model_dir)
+        models = load_models(model_dir, args.label_prefix)
 
         # 4. 评估各模型
         logger.info("步骤 4/5: 评估各模型")
         model_results = []
         for window in TIME_WINDOWS:
-            target = f"试驾标签_{window}"
+            target = f"{args.label_prefix}_{window}"
             logger.info(f"  评估: {target}")
             result = evaluate_single_model(models[target], df_processed, target)
             model_results.append(result)
-            logger.info(f"    ROC-AUC: {result['roc_auc']:.4f if result['roc_auc'] else 'N/A'}")
+            roc_auc_str = f"{result['roc_auc']:.4f}" if result['roc_auc'] else "N/A"
+            logger.info(f"    ROC-AUC: {roc_auc_str}")
 
         # 5. 验证 HAB 推导
         logger.info("步骤 5/5: 验证 HAB 推导")
@@ -393,7 +411,8 @@ def main():
             logger.info(f"  {rating} 级: {count}")
 
         # 输出试驾率
-        logger.info("各评级实际试驾率:")
+        rate_label = "试驾率" if args.label_prefix == "试驾标签" else "下订率"
+        logger.info(f"各评级实际{rate_label}:")
         for rating, rates in hab_validation["actual_drive_rates"].items():
             logger.info(
                 f"  {rating} 级: 7天={rates['rate_7d']:.2%}, "
@@ -442,7 +461,8 @@ def main():
         print("=" * 60)
         print("\n各模型 ROC-AUC:")
         for r in model_results:
-            print(f"  {r['target']}: {r['roc_auc']:.4f if r['roc_auc'] else 'N/A'}")
+            roc_auc_str = f"{r['roc_auc']:.4f}" if r['roc_auc'] else "N/A"
+            print(f"  {r['target']}: {roc_auc_str}")
         print(f"\n分层效果: {'✅ 通过' if hab_validation['is_hierarchical'] else '❌ 未通过'}")
         print(f"\n报告路径: {report_path}")
 

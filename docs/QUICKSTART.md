@@ -172,7 +172,25 @@ uv run python scripts/predict.py \
     --data-path ./data/unified_split/test.parquet \
     --output ./predictions_full.csv \
     --include-original
+
+# 下订预测（试驾后阶段）
+uv run python scripts/predict.py \
+    --mode medium \
+    --ensemble-path ./outputs/models/order_after_drive_ensemble \
+    --data-path ./data/order_after_drive_v2_test.parquet \
+    --output ./order_predictions.csv \
+    --label-prefix 下订标签 \
+    --skip-adapter
 ```
+
+**预测参数说明**：
+
+| 参数 | 说明 | 默认值 |
+|------|------|--------|
+| `--mode` | 预测模式（simple/medium/advanced） | simple |
+| `--label-prefix` | 标签前缀（试驾标签/下订标签） | 试驾标签 |
+| `--skip-adapter` | 跳过数据适配器，直接加载 Parquet | false |
+| `--include-original` | 包含原始数据列 | false |
 
 **OHABCN 评级说明**：
 

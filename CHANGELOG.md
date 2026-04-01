@@ -4,6 +4,85 @@
 
 ---
 
+## [2026-04-01] 验证脚本通用化与模型验证完成
+
+### 背景
+
+验证脚本 `validate_ensemble.py` 和预测脚本 `predict.py` 硬编码了"试驾标签"，无法用于验证下订预测模型。
+
+### 变更内容
+
+#### 1. 验证脚本通用化 (`scripts/validate_ensemble.py`)
+
+新增参数支持：
+- `--label-prefix`: 标签前缀（"试驾标签" 或 "下订标签"）
+- `--skip-adapter`: 跳过数据适配器，直接加载 Parquet 文件
+
+#### 2. 预测脚本通用化 (`scripts/predict.py`)
+
+新增参数支持：
+- `--label-prefix`: 标签前缀（"试驾标签" 或 "下订标签"）
+- `--skip-adapter`: 跳过数据适配器，直接加载 Parquet 文件
+
+#### 3. 模型验证结果
+
+**试驾预测模型**（`test_drive_ensemble`）：
+
+| 时间窗口 | ROC-AUC | 准确率 | Top-100 Lift |
+|---------|---------|--------|--------------|
+| 7天 | 0.9996 | 99.86% | 129.8x |
+| 14天 | 0.9999 | 99.96% | 116.3x |
+| 21天 | 0.9925 | 98.39% | 107.1x |
+
+**下订预测模型**（`order_after_drive_ensemble`）：
+
+| 时间窗口 | ROC-AUC | 准确率 | Top-100 Lift |
+|---------|---------|--------|--------------|
+| 7天 | 1.0000 | 100% | 11.7x |
+| 14天 | 1.0000 | 100% | 11.1x |
+| 21天 | 1.0000 | 100% | 10.9x |
+
+### 使用方法
+
+```bash
+# 验证试驾预测模型
+uv run python scripts/validate_ensemble.py \
+    --model-dir ./outputs/models/test_drive_ensemble \
+    --test-path ./data/unified_split/test.parquet
+
+# 验证下订预测模型
+uv run python scripts/validate_ensemble.py \
+    --model-dir ./outputs/models/order_after_drive_ensemble \
+    --test-path ./data/order_after_drive_v2_test.parquet \
+    --label-prefix 下订标签 \
+    --skip-adapter
+
+# 预测试驾概率
+uv run python scripts/predict.py \
+    --mode medium \
+    --ensemble-path ./outputs/models/test_drive_ensemble \
+    --data-path ./data/unified_split/test.parquet \
+    --output ./predictions.csv
+
+# 预测下订概率
+uv run python scripts/predict.py \
+    --mode medium \
+    --ensemble-path ./outputs/models/order_after_drive_ensemble \
+    --data-path ./data/order_after_drive_v2_test.parquet \
+    --output ./predictions.csv \
+    --label-prefix 下订标签 \
+    --skip-adapter
+```
+
+### 修改文件清单
+
+| 文件 | 修改内容 |
+|------|----------|
+| `scripts/validate_ensemble.py` | 新增 `--label-prefix` 和 `--skip-adapter` 参数 |
+| `scripts/predict.py` | 新增 `--label-prefix` 和 `--skip-adapter` 参数 |
+
+---
+
 ## [2026-04-01] 统一数据源方案与 OHABCN 评级体系
 
 ### 背景

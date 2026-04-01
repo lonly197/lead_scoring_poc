@@ -213,6 +213,7 @@ def predict_medium(
     id_column: str,
     include_original: bool,
     thresholds: Dict[str, float],
+    label_prefix: str = "试驾标签",
 ) -> pd.DataFrame:
     """
     中等模式预测
@@ -225,6 +226,7 @@ def predict_medium(
         id_column: ID 列名
         include_original: 是否包含原始列
         thresholds: 各级别阈值
+        label_prefix: 标签前缀（"试驾标签" 或 "下订标签"）
 
     Returns:
         预测结果 DataFrame
@@ -232,16 +234,17 @@ def predict_medium(
     logger.info("=== 中等模式预测 ===")
 
     # 加载模型
-    models = load_ensemble_models(ensemble_path, label_prefix="试驾标签")
+    models = load_ensemble_models(ensemble_path, label_prefix=label_prefix)
 
     # 加载特征元数据（使用第一个模型）
-    first_model_path = ensemble_path / "试驾标签_7天"
+    first_model_path = ensemble_path / f"{label_prefix}_7天"
     metadata = load_feature_metadata(first_model_path)
     interaction_context = metadata.get("interaction_context", {})
 
     # 预测各时间窗口概率
     probas = {}
-    for window, label in [("7天", "试驾标签_7天"), ("14天", "试驾标签_14天"), ("21天", "试驾标签_21天")]:
+    for window in ["7天", "14天", "21天"]:
+        label = f"{label_prefix}_{window}"
         if label not in models:
             logger.warning(f"模型缺失: {label}，使用默认概率 0")
             probas[window] = np.zeros(len(df))
@@ -384,6 +387,8 @@ def predict(
     include_original: bool = False,
     thresholds: Optional[Dict[str, float]] = None,
     id_column: str = "线索唯一ID",
+    skip_adapter: bool = False,
+    label_prefix: str = "试驾标签",
 ) -> pd.DataFrame:
     """
     对数据进行预测
@@ -399,6 +404,8 @@ def predict(
         include_original: 是否包含原始列
         thresholds: OHAB 评级阈值
         id_column: ID 列名
+        skip_adapter: 是否跳过数据适配器
+        label_prefix: 标签前缀（"试驾标签" 或 "下订标签"）
 
     Returns:
         预测结果 DataFrame
@@ -408,8 +415,12 @@ def predict(
 
     # 加载数据
     logger.info(f"加载数据: {data_path}")
-    loader = DataLoader(str(data_path), auto_adapt=True)
-    df = loader.load()
+    if skip_adapter and str(data_path).endswith('.parquet'):
+        df = pd.read_parquet(data_path)
+        logger.info(f"直接加载 Parquet（跳过适配器）: {len(df)} 行")
+    else:
+        loader = DataLoader(str(data_path), auto_adapt=True)
+        df = loader.load()
     logger.info(f"数据量: {len(df)} 行, {len(df.columns)} 列")
 
     # 根据模式执行预测
@@ -433,6 +444,7 @@ def predict(
             id_column=id_column,
             include_original=include_original,
             thresholds=thresholds,
+            label_prefix=label_prefix,
         )
 
     elif mode == "advanced":
@@ -575,6 +587,17 @@ def parse_args():
         default="线索唯一ID",
         help="ID 列名（默认: 线索唯一ID）",
     )
+    parser.add_argument(
+        "--skip-adapter",
+        action="store_true",
+        help="跳过数据适配器，直接加载 Parquet 文件",
+    )
+    parser.add_argument(
+        "--label-prefix",
+        type=str,
+        default="试驾标签",
+        help="标签前缀（试驾标签 或 下订标签，默认: 试驾标签）",
+    )
 
     return parser.parse_args()
 
@@ -606,6 +629,8 @@ def main():
         include_original=args.include_original,
         thresholds=thresholds,
         id_column=args.id_column,
+        skip_adapter=args.skip_adapter,
+        label_prefix=args.label_prefix,
     )
 
     # 输出统计
