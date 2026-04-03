@@ -51,23 +51,18 @@ uv run python scripts/run.py validate \
 
 # 预测（纯推理，无需标签）
 uv run python scripts/predict.py \
-    --model-path ./outputs/models/test_drive_ensemble \
+    --mode medium \
+    --ensemble-path ./outputs/models/test_drive_ensemble \
     --data-path ./data/unified_split/test.parquet \
     --output ./predictions.csv
 
-# 预测 + OHAB 评级（O/H/A/B/N）
+# 预测 + OHABCN 评级（O/H/A/B/C/N）
 uv run python scripts/predict.py \
-    --model-path ./outputs/models/test_drive_ensemble \
+    --mode medium \
+    --ensemble-path ./outputs/models/test_drive_ensemble \
     --data-path ./data/unified_split/test.parquet \
     --output ./predictions.csv \
     --include-ohab
-
-# 预测（包含原始数据列）
-uv run python scripts/predict.py \
-    --model-path ./outputs/models/test_drive_ensemble \
-    --data-path ./data/unified_split/test.parquet \
-    --output ./predictions_full.csv \
-    --include-original
 
 # 监控任务
 uv run python scripts/run.py monitor status
@@ -388,7 +383,67 @@ train_df, valid_df, test_df, metadata = split_data_oot_three_way_duckdb(
 | `src/models/predictor.py` | 模型封装：训练、清理 |
 | `src/inference/hab_deriver.py` | HAB 推导逻辑（三模型模式） |
 
+## 预测模式
+
+`scripts/predict.py` 支持三种预测模式：
+
+| 模式 | 描述 | 输入模型 | 业务匹配度 |
+|------|------|---------|-----------|
+| `simple` | 简单模式 | 单模型（14天概率） | 部分 |
+| `medium` | 中等模式（推荐） | 三模型集成（7/14/21天） | 完整匹配试驾前阶段 |
+| `advanced` | 高等模式 | 试驾+下订双阶段 | 完整匹配全部规则 |
+
+```bash
+# 中等模式（推荐）
+uv run python scripts/predict.py \
+    --mode medium \
+    --ensemble-path ./outputs/models/test_drive_ensemble \
+    --data-path ./data/unified_split/test.parquet \
+    --output ./predictions.csv \
+    --include-ohab
+
+# 高等模式（分阶段：未试驾→试驾模型，已试驾→下订模型）
+uv run python scripts/predict.py \
+    --mode advanced \
+    --drive-ensemble-path ./outputs/models/test_drive_ensemble \
+    --order-ensemble-path ./outputs/models/order_after_drive_ensemble \
+    --data-path ./data/unified_split/test.parquet \
+    --output ./predictions.csv \
+    --include-ohab
+```
+
+### OHABCN 评级体系
+
+| 评级 | 定义 | 分值范围 | 说明 |
+|------|------|---------|------|
+| O | 已成交 | 100分 | 已订车/已成交 |
+| H | 7天内试驾/下订 | 80-99分 | 高意向 |
+| A | 14天内试驾/下订 | 60-79分 | 中意向 |
+| B | 21天内试驾/下订 | 40-59分 | 低意向 |
+| C | 有意向但超过21天 | 20-39分 | 超长尾意向 |
+| N | 无效线索 | 0分 | 无电话/已购竞品/明确拒绝 |
+
+**分值计算**：基础分 + 概率 × 区间宽度，输出连续分值（0-100）。
+
 ## 数据质量警告
+
+### ⚠️ 特征泄漏风险（关键！）
+
+**已发现问题**：训练数据中包含 `试驾标签_21天` 等标签列导致模型性能虚高（ROC-AUC 99.96% → 实际 ~80-90%）。
+
+**必须排除的泄漏特征**（定义在 `config/config.py` 的 `leakage_columns`）：
+- **直接编码目标**：`是否到店`、`是否试驾`、`试驾天数差`、`试驾时间`、`到店时间`
+- **后验评级**：`线索评级结果`、`线索评级_试驾后`、`意向级别`
+- **JSON 提取**：`提及试驾`、`提及到店`（备忘可能记录"已试驾"）
+- **标签列**：`试驾标签_*`、`下订标签_*`、`到店标签_*`（目标变量）
+
+**验证方法**：
+```bash
+# 检查特征重要性，若标签列重要性过高则存在泄漏
+grep "试驾标签" outputs/models/*/feature_importance.csv
+```
+
+### 类别不平衡
 
 当前数据集 O 级（已成交）样本仅 12 个，极度不平衡。建议：
 - 降级为三分类（H/A/B）
