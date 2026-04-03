@@ -65,6 +65,9 @@ from src.models.ohab_rater import OHABRater, PredictionMode
 
 logger = logging.getLogger(__name__)
 
+# 标签列标识符
+LABEL_COLUMN_MARKERS = ('标签', '评级')
+
 
 def load_feature_metadata(model_path: Path) -> dict:
     """加载训练时保存的特征工程元数据"""
@@ -145,7 +148,7 @@ def prepare_data_for_prediction(
     # 注意：如果训练时模型将标签列作为特征学习（标签泄漏），
     # 预测时必须保留相同的列结构，否则会导致特征不匹配而预测失败
     if keep_label_columns:
-        label_columns = [col for col in df_processed.columns if '标签' in col or '评级' in col]
+        label_columns = [col for col in df_processed.columns if any(marker in col for marker in LABEL_COLUMN_MARKERS)]
         cols_to_drop = [col for col in excluded_columns if col in df_processed.columns and col not in label_columns]
     else:
         cols_to_drop = [col for col in excluded_columns if col in df_processed.columns]
