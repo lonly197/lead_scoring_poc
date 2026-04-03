@@ -39,10 +39,7 @@ ENV/
 .env.*
 
 # Data
-data/*.csv
-data/*.tsv
-data/*.json
-data/*.parquet
+data/
 !data/.gitkeep
 
 # Outputs (models, logs, reports, etc.)
