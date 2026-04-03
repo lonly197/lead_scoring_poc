@@ -117,6 +117,7 @@ def prepare_data_for_prediction(
     target: str,
     interaction_context: dict,
     excluded_columns: List[str],
+    keep_label_columns: bool = True,
 ) -> pd.DataFrame:
     """
     为预测准备数据
@@ -126,6 +127,7 @@ def prepare_data_for_prediction(
         target: 目标变量
         interaction_context: 特征工程上下文
         excluded_columns: 排除列
+        keep_label_columns: 是否保留标签列（若训练时存在标签泄漏，预测时需保留以匹配特征）
 
     Returns:
         处理后的数据
@@ -140,7 +142,14 @@ def prepare_data_for_prediction(
     df_processed, _ = feature_engineer.transform(df, interaction_context=interaction_context)
 
     # 删除排除列
-    cols_to_drop = [col for col in excluded_columns if col in df_processed.columns and col != target]
+    # 注意：如果训练时模型将标签列作为特征学习（标签泄漏），
+    # 预测时必须保留相同的列结构，否则会导致特征不匹配而预测失败
+    if keep_label_columns:
+        label_columns = [col for col in df_processed.columns if '标签' in col or '评级' in col]
+        cols_to_drop = [col for col in excluded_columns if col in df_processed.columns and col not in label_columns]
+    else:
+        cols_to_drop = [col for col in excluded_columns if col in df_processed.columns]
+
     if cols_to_drop:
         df_processed = df_processed.drop(columns=cols_to_drop)
 
