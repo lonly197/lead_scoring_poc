@@ -13,11 +13,14 @@ scripts/
 │   ├── 03_clean.py     # 数据清洗
 │   ├── 04_desensitize.py # 数据脱敏
 │   ├── 05_split.py     # 数据拆分
+│   ├── 06_compute_labels.py # 时间窗口标签计算
 │   ├── 06_split_unified.py # 统一数据拆分（试驾+下订）
+│   ├── 07_order_after_drive.py # 试驾后下订数据集生成
 │   ├── excel_to_csv.py   # Excel→CSV（xlsx2csv）
 │   ├── excel_to_parquet.py # Excel→Parquet（流式）
 │   └── merge_parquet.py   # Parquet 合并（DuckDB）
 ├── convert_to_parquet.py   # CSV/TSV→Parquet
+├── parquet_to_csv.py       # Parquet→CSV（DuckDB）
 ├── merge_data.py           # 数据合并（旧版）
 ├── diagnose_data.py        # 数据诊断
 ├── run.py                  # 一级入口
@@ -26,7 +29,9 @@ scripts/
 ├── train_*.py              # 各任务训练脚本
 ├── validate_*.py           # 各任务验证脚本
 ├── monitor.py              # 后台任务监控
+├── monitor_progress.py     # 训练进度监控
 ├── generate_*.py           # 报告生成脚本
+├── generate_local_plots.py # 本地图表生成
 └── test_adapter.py         # 数据适配测试
 ```
 
@@ -146,6 +151,26 @@ uv run python scripts/pipeline/06_split_unified.py \
     --cutoff 2026-03-01
 ```
 
+### 06_compute_labels.py - 时间窗口标签计算
+
+使用 DuckDB 计算时间窗口标签（7/14/21天内试驾）和 OHAB 级别。
+
+```bash
+uv run python scripts/pipeline/06_compute_labels.py \
+    --input ./data/线索宽表_清洗后.parquet \
+    --output ./data/线索宽表_带标签.parquet
+```
+
+### 07_order_after_drive.py - 试驾后下订数据集生成
+
+从原始线索宽表筛选已试驾样本，计算下订时间窗口标签。
+
+```bash
+uv run python scripts/pipeline/07_order_after_drive.py \
+    --input ./data/线索宽表_合并_补充试驾.parquet \
+    --output ./data/order_after_drive
+```
+
 **数据架构**：
 ```
 线索宽表_合并_补充试驾.parquet (1,199,453 行)
@@ -216,6 +241,21 @@ uv run python scripts/convert_to_parquet.py ./data/file.tsv --compression gzip
 
 # 流式处理大文件
 uv run python scripts/convert_to_parquet.py ./data/large.tsv --chunksize 100000
+```
+
+### parquet_to_csv.py - Parquet 转 CSV（DuckDB）
+
+使用 DuckDB 将 Parquet 文件转换为 CSV 格式，性能优异。
+
+```bash
+# 转换单个文件
+uv run python scripts/parquet_to_csv.py ./data/final_test.parquet
+
+# 批量转换目录
+uv run python scripts/parquet_to_csv.py ./data --batch
+
+# 自定义分隔符
+uv run python scripts/parquet_to_csv.py ./data/final_test.parquet --sep tab
 ```
 
 ---
@@ -406,6 +446,30 @@ uv run python scripts/monitor.py log train_ohab -f
 uv run python scripts/monitor.py stop --all
 ```
 
+### monitor_progress.py - 训练进度监控
+
+实时分析训练日志，输出友好的进度信息。
+
+```bash
+# 实时监控最新训练日志
+uv run python scripts/monitor_progress.py
+
+# 持续监控（类似 tail -f）
+uv run python scripts/monitor_progress.py --follow
+```
+
+### generate_local_plots.py - 本地图表生成
+
+读取服务器同步回来的 CSV/JSON 产出物，在本地环境生成带中文字体的图表。
+
+```bash
+# 生成 OHAB 模型验证图表
+uv run python scripts/generate_local_plots.py --input-dir ./outputs/validation/ohab_validation
+
+# 指定输出目录
+uv run python scripts/generate_local_plots.py --input-dir ./outputs/validation/ohab_validation --output-dir ./outputs/plots/ohab
+```
+
 ### generate_business_report.py - 业务报告生成
 
 生成客户版评级报告。
@@ -464,6 +528,8 @@ uv run python scripts/generate_topk.py \
 
 | 日期 | 新增脚本 | 说明 |
 |------|----------|------|
+| 2026-04-03 | 文档更新 | 补充遗漏脚本文档，删除临时脚本 |
+| 2026-04-03 | 删除脚本 | 移除 `03_clean_duckdb.py`（重复功能） |
 | 2026-03-31 | `predict.py` | 模型预测脚本（纯推理，无需标签） |
 | 2026-03-31 | `excel_to_csv.py` | Excel→CSV 快速转换 |
 | 2026-03-31 | `excel_to_parquet.py` | Excel→Parquet 流式处理 |
