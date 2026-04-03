@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pandas as pd
 
-project_root = Path(__file__).parent.parent
+project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
 from config.config import config, get_excluded_columns

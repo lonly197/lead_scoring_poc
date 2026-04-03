@@ -248,7 +248,7 @@ def main() -> int:
     # 处理命令
     if args.command == "train":
         # train 子命令
-        train_script = scripts_dir / "train_model.py"
+        train_script = scripts_dir / "training/train_model.py"
         task = getattr(args, "task", "test_drive")
         daemon = args.daemon
 
@@ -274,7 +274,7 @@ def main() -> int:
 
     elif args.command == "validate":
         # validate 子命令
-        validate_script = scripts_dir / "validate_model.py"
+        validate_script = scripts_dir / "validation/validate_model.py"
 
         # 构建参数
         forwarded_args = list(pass_args)
@@ -291,7 +291,7 @@ def main() -> int:
 
     elif args.command == "monitor":
         # monitor 子命令
-        monitor_script = scripts_dir / "monitor.py"
+        monitor_script = scripts_dir / "tools/monitor.py"
 
         monitor_cmd = getattr(args, "monitor_cmd", "status")
         forwarded_args = [monitor_cmd]
@@ -333,7 +333,7 @@ def main() -> int:
         }
 
         if args.legacy_task in legacy_tasks:
-            train_script = scripts_dir / "train_model.py"
+            train_script = scripts_dir / "training/train_model.py"
             forwarded_args = [legacy_tasks[args.legacy_task]] + list(pass_args)
             if args.legacy_daemon:
                 forwarded_args.append("--daemon")

@@ -26,7 +26,7 @@ from typing import Any
 
 import pandas as pd
 
-project_root = Path(__file__).parent.parent
+project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
 from src.evaluation.business_logic import build_bucket_summary_text, summarize_top_dimensions

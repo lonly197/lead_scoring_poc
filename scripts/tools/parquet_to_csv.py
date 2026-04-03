@@ -30,7 +30,7 @@ from pathlib import Path
 from typing import List, Optional
 
 # 添加项目根目录
-project_root = Path(__file__).parent.parent
+project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
 

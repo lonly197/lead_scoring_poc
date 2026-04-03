@@ -6,33 +6,52 @@
 
 ```
 scripts/
-├── pipeline/           # 数据管道脚本（推荐）
-│   ├── run_pipeline.py # 统一管道运行器
-│   ├── 01_merge.py     # 数据合并
-│   ├── 02_profile.py   # 数据探查
-│   ├── 03_clean.py     # 数据清洗
-│   ├── 04_desensitize.py # 数据脱敏
-│   ├── 05_split.py     # 数据拆分
-│   ├── 06_compute_labels.py # 时间窗口标签计算
-│   ├── 06_split_unified.py # 统一数据拆分（试驾+下订）
-│   ├── 07_order_after_drive.py # 试驾后下订数据集生成
-│   ├── excel_to_csv.py   # Excel→CSV（xlsx2csv）
-│   ├── excel_to_parquet.py # Excel→Parquet（流式）
-│   └── merge_parquet.py   # Parquet 合并（DuckDB）
-├── convert_to_parquet.py   # CSV/TSV→Parquet
-├── parquet_to_csv.py       # Parquet→CSV（DuckDB）
-├── merge_data.py           # 数据合并（旧版）
-├── diagnose_data.py        # 数据诊断
-├── run.py                  # 一级入口
-├── train_model.py          # 二级入口：训练
-├── validate_model.py       # 二级入口：验证
-├── train_*.py              # 各任务训练脚本
-├── validate_*.py           # 各任务验证脚本
-├── monitor.py              # 后台任务监控
-├── monitor_progress.py     # 训练进度监控
-├── generate_*.py           # 报告生成脚本
-├── generate_local_plots.py # 本地图表生成
-└── test_adapter.py         # 数据适配测试
+├── run.py                  # 一级入口（统一调度器）
+├── quickstart.sh           # 快速启动脚本
+│
+├── training/               # 训练脚本
+│   ├── train_model.py      # 二级入口：训练路由器
+│   ├── train_arrive.py     # 到店预测训练
+│   ├── train_ohab.py       # OHAB 评级训练
+│   ├── train_test_drive.py # 试驾预测训练
+│   ├── train_test_drive_ensemble.py  # 试驾预测三模型集成
+│   └── train_order_after_drive.py    # 下订预测三模型集成
+│
+├── validation/             # 验证脚本
+│   ├── validate_model.py   # 二级入口：验证路由器
+│   ├── validate_arrive_model.py    # 到店验证
+│   ├── validate_ohab_model.py      # OHAB 验证
+│   ├── validate_test_drive_model.py # 试驾验证
+│   └── validate_ensemble.py        # 集成验证
+│
+├── prediction/             # 预测脚本
+│   └── predict.py          # 模型预测（纯推理）
+│
+├── tools/                  # 工具脚本
+│   ├── monitor.py          # 后台任务监控
+│   ├── monitor_progress.py # 训练进度监控
+│   ├── diagnose_data.py    # 数据诊断
+│   ├── convert_to_parquet.py # CSV/TSV→Parquet
+│   ├── parquet_to_csv.py   # Parquet→CSV
+│   ├── merge_data.py       # 数据合并（旧版）
+│   ├── generate_business_report.py  # 业务报告
+│   ├── generate_topk.py    # Top-K 名单
+│   ├── generate_local_plots.py # 本地图表
+│   └── test_adapter.py     # 数据适配测试
+│
+└── pipeline/               # 数据管道脚本（推荐）
+    ├── run_pipeline.py     # 统一管道运行器
+    ├── 01_merge.py         # 数据合并
+    ├── 02_profile.py       # 数据探查
+    ├── 03_clean.py         # 数据清洗
+    ├── 04_desensitize.py   # 数据脱敏
+    ├── 05_split.py         # 数据拆分
+    ├── 06_compute_labels.py # 时间窗口标签计算
+    ├── 06_split_unified.py # 统一数据拆分
+    ├── 07_order_after_drive.py # 试驾后下订数据集
+    ├── excel_to_csv.py     # Excel→CSV
+    ├── excel_to_parquet.py # Excel→Parquet
+    └── merge_parquet.py    # Parquet 合并
 ```
 
 ---
