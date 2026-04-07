@@ -2,16 +2,16 @@
 
 本目录包含数据预处理、模型训练、验证评估等所有脚本。
 
+---
+
 ## 目录结构
 
 ```
 scripts/
 ├── run.py                  # 一级入口（统一调度器）
-├── quickstart.sh           # 快速启动脚本
 │
 ├── training/               # 训练脚本
 │   ├── train_model.py      # 二级入口：训练路由器
-│   ├── train_arrive.py     # 到店预测训练
 │   ├── train_ohab.py       # OHAB 评级训练
 │   ├── train_test_drive.py # 试驾预测训练
 │   ├── train_test_drive_ensemble.py  # 试驾预测三模型集成
@@ -19,271 +19,30 @@ scripts/
 │
 ├── validation/             # 验证脚本
 │   ├── validate_model.py   # 二级入口：验证路由器
-│   ├── validate_arrive_model.py    # 到店验证
-│   ├── validate_ohab_model.py      # OHAB 验证
-│   ├── validate_test_drive_model.py # 试驾验证
-│   └── validate_ensemble.py        # 集成验证
+│   ├── validate_ohab_model.py        # OHAB 验证
+│   └── validate_ensemble.py          # 集成验证
 │
 ├── prediction/             # 预测脚本
 │   └── predict.py          # 模型预测（纯推理）
 │
 ├── tools/                  # 工具脚本
 │   ├── monitor.py          # 后台任务监控
-│   ├── monitor_progress.py # 训练进度监控
 │   ├── diagnose_data.py    # 数据诊断
-│   ├── convert_to_parquet.py # CSV/TSV→Parquet
-│   ├── parquet_to_csv.py   # Parquet→CSV
-│   ├── merge_data.py       # 数据合并（旧版）
-│   ├── generate_business_report.py  # 业务报告
-│   ├── generate_topk.py    # Top-K 名单
-│   ├── generate_local_plots.py # 本地图表
-│   └── test_adapter.py     # 数据适配测试
+│   └── generate_topk.py    # Top-K 名单
 │
-└── pipeline/               # 数据管道脚本（推荐）
+└── pipeline/               # 数据管道脚本
     ├── run_pipeline.py     # 统一管道运行器
     ├── 01_merge.py         # 数据合并
     ├── 02_profile.py       # 数据探查
     ├── 03_clean.py         # 数据清洗
     ├── 04_desensitize.py   # 数据脱敏
     ├── 05_split.py         # 数据拆分
-    ├── 06_compute_labels.py # 时间窗口标签计算
-    ├── 06_split_unified.py # 统一数据拆分
-    ├── 07_order_after_drive.py # 试驾后下订数据集
-    ├── excel_to_csv.py     # Excel→CSV
-    ├── excel_to_parquet.py # Excel→Parquet
-    └── merge_parquet.py    # Parquet 合并
+    └── 06_split_unified.py # 统一数据拆分
 ```
 
 ---
 
-## 数据管道脚本（推荐）
-
-### run_pipeline.py - 统一管道运行器
-
-一键执行完整数据管道：合并 → 探查 → 清洗 → 脱敏 → 拆分。
-
-```bash
-# 一键执行完整管道
-uv run python scripts/pipeline/run_pipeline.py \
-    --excel ./data/线索宽表.xlsx \
-    --dmp ./data/DMP行为数据.csv \
-    --output ./data/final
-
-# 跳过特定步骤
-uv run python scripts/pipeline/run_pipeline.py \
-    --excel ./data/线索宽表.xlsx \
-    --dmp ./data/DMP行为数据.csv \
-    --output ./data/final \
-    --skip desensitize
-
-# 单步执行
-uv run python scripts/pipeline/run_pipeline.py \
-    --step clean \
-    --input ./data/merged.parquet \
-    --output ./data/cleaned.parquet
-```
-
-**管道流程**：
-```
-Excel + DMP → merged.parquet → profile.md → cleaned.parquet → desensitized.parquet → train/test.parquet
-```
-
-### 01_merge.py - 数据合并
-
-使用 DuckDB 流式合并 Excel 多 Sheet + DMP 行为数据。
-
-```bash
-uv run python scripts/pipeline/01_merge.py \
-    --excel ./data/线索宽表.xlsx \
-    --dmp ./data/DMP行为数据.csv \
-    --output ./data/merged.parquet \
-    --memory-limit 4GB \
-    --threads 4
-```
-
-### 02_profile.py - 数据探查
-
-生成数据概览报告，包括缺失值、分布、清洗建议。
-
-```bash
-uv run python scripts/pipeline/02_profile.py \
-    --input ./data/merged.parquet \
-    --target 线索评级结果 \
-    --output ./reports/profile.md
-```
-
-### 03_clean.py - 数据清洗
-
-处理异常值、偏斜分布、高基数类别。
-
-```bash
-uv run python scripts/pipeline/03_clean.py \
-    --input ./data/merged.parquet \
-    --output ./data/cleaned.parquet \
-    --target 线索评级结果
-```
-
-### 04_desensitize.py - 数据脱敏
-
-品牌关键词替换、ID掩码、手机号脱敏。
-
-```bash
-uv run python scripts/pipeline/04_desensitize.py \
-    --input ./data/cleaned.parquet \
-    --output ./data/desensitized.parquet
-```
-
-### 05_split.py - 数据拆分
-
-支持 random、oot、auto 三种拆分模式。
-
-```bash
-# OOT 时间切分（推荐）
-uv run python scripts/pipeline/05_split.py \
-    --input ./data/desensitized.parquet \
-    --output ./data/final \
-    --mode oot \
-    --time-column 线索创建时间 \
-    --cutoff 2026-03-01
-
-# 随机拆分
-uv run python scripts/pipeline/05_split.py \
-    --input ./data/desensitized.parquet \
-    --output ./data/final \
-    --mode random \
-    --target 线索评级结果
-```
-
-### 06_split_unified.py - 统一数据拆分（推荐）
-
-从单一数据源生成试驾预测和下订预测的训练/测试集，确保数据切分一致。
-
-**输出文件**：
-- `train.parquet` / `test.parquet` - 全量线索，用于试驾预测
-- `train_driven.parquet` / `test_driven.parquet` - 已试驾子集，用于下订预测
-
-```bash
-uv run python scripts/pipeline/06_split_unified.py \
-    --input ./data/线索宽表_合并_补充试驾.parquet \
-    --output ./data/unified_split \
-    --time-column 线索创建时间 \
-    --cutoff 2026-03-01
-```
-
-### 06_compute_labels.py - 时间窗口标签计算
-
-使用 DuckDB 计算时间窗口标签（7/14/21天内试驾）和 OHAB 级别。
-
-```bash
-uv run python scripts/pipeline/06_compute_labels.py \
-    --input ./data/线索宽表_清洗后.parquet \
-    --output ./data/线索宽表_带标签.parquet
-```
-
-### 07_order_after_drive.py - 试驾后下订数据集生成
-
-从原始线索宽表筛选已试驾样本，计算下订时间窗口标签。
-
-```bash
-uv run python scripts/pipeline/07_order_after_drive.py \
-    --input ./data/线索宽表_合并_补充试驾.parquet \
-    --output ./data/order_after_drive
-```
-
-**数据架构**：
-```
-线索宽表_合并_补充试驾.parquet (1,199,453 行)
-    ↓ OOT 时间切分（2026-03-01）
-    ├── train.parquet (791,546 行) → 试驾预测训练
-    ├── test.parquet (407,907 行) → 试驾预测测试
-    ├── train_driven.parquet (47,413 行) → 下订预测训练
-    └── test_driven.parquet (22,067 行) → 下订预测测试
-```
-
----
-
-## 大文件处理脚本
-
-### excel_to_csv.py - Excel 转 CSV（xlsx2csv）
-
-xlsx2csv 比 openpyxl 快 10-50 倍，适合处理大文件。
-
-```bash
-# 转换所有 Sheet（每个 Sheet 一个 CSV）
-uv run python scripts/pipeline/excel_to_csv.py \
-    --input ./data/large.xlsx \
-    --output-dir ./data/csv
-
-# 合并所有 Sheet 到单个 CSV
-uv run python scripts/pipeline/excel_to_csv.py \
-    --input ./data/large.xlsx \
-    --output ./data/merged.csv \
-    --merge-sheets
-```
-
-### excel_to_parquet.py - Excel 转 Parquet（流式）
-
-使用 openpyxl read_only 模式流式读取，分批写入 Parquet，严格控制内存。
-
-```bash
-uv run python scripts/pipeline/excel_to_parquet.py \
-    --input ./data/large.xlsx \
-    --output ./data/output.parquet \
-    --batch-size 50000
-```
-
-### merge_parquet.py - Parquet 合并（DuckDB）
-
-直接合并 Parquet 格式的线索数据和 DMP 数据，无需 Excel 转换。
-
-```bash
-uv run python scripts/pipeline/merge_parquet.py \
-    --clue ./data/线索数据.parquet \
-    --dmp ./data/DMP数据.parquet \
-    --output ./data/merged.parquet \
-    --phone-column "手机号（脱敏）"
-```
-
-### convert_to_parquet.py - CSV/TSV 转 Parquet
-
-转换 CSV/TSV 文件为 Parquet 格式，提升加载速度和减少存储空间。
-
-```bash
-# 转换单个文件
-uv run python scripts/convert_to_parquet.py ./data/202602~03.tsv
-
-# 批量转换目录
-uv run python scripts/convert_to_parquet.py ./data --batch
-
-# 指定压缩算法
-uv run python scripts/convert_to_parquet.py ./data/file.tsv --compression gzip
-
-# 流式处理大文件
-uv run python scripts/convert_to_parquet.py ./data/large.tsv --chunksize 100000
-```
-
-### parquet_to_csv.py - Parquet 转 CSV（DuckDB）
-
-使用 DuckDB 将 Parquet 文件转换为 CSV 格式，性能优异。
-
-```bash
-# 转换单个文件
-uv run python scripts/parquet_to_csv.py ./data/final_test.parquet
-
-# 批量转换目录
-uv run python scripts/parquet_to_csv.py ./data --batch
-
-# 自定义分隔符
-uv run python scripts/parquet_to_csv.py ./data/final_test.parquet --sep tab
-```
-
----
-
-## 训练脚本
-
-### run.py - 一级入口
-
-统一调度器，支持训练、验证、监控子命令。
+## 一级入口：run.py
 
 ```bash
 # 训练任务
@@ -298,158 +57,88 @@ uv run python scripts/run.py monitor log train_test_drive -f
 uv run python scripts/run.py monitor stop --all
 ```
 
-### train_model.py - 二级入口：训练路由器
-
-根据任务名路由到具体训练脚本。
-
-```bash
-uv run python scripts/train_model.py test_drive --daemon \
-    --data-path ./data/202603.parquet \
-    --included-model-types CAT
-```
-
-### 各任务训练脚本
-
-| 脚本 | 目标变量 | 说明 |
-|------|----------|------|
-| `train_test_drive_ensemble.py` | 试驾标签_7/14/21天 | **核心**：试驾预测三模型集成 |
-| `train_order_after_drive.py` | 下订标签_7/14/21天 | **核心**：下订预测三模型集成 |
-| `train_test_drive.py` | 试驾标签 | 辅助：单模型试驾预测 |
-| `train_ohab.py` | 线索评级结果 | 辅助：HAB 评级 |
-| `train_arrive.py` | 到店标签 | 辅助：到店预测 |
-
 ---
 
-## 验证脚本
+## 数据管道脚本
 
-### validate_model.py - 二级入口：验证路由器
-
-自动加载训练时记录的测试集配置，确保防泄漏评估。
+### 一键执行
 
 ```bash
-uv run python scripts/validate_model.py \
-    --model-path ./outputs/models/test_drive_model \
-    --data-path ./data/202603.parquet
+uv run python scripts/pipeline/run_pipeline.py \
+    --excel ./data/线索宽表.xlsx \
+    --dmp ./data/DMP行为数据.csv \
+    --output ./data/final
 ```
 
-### 各任务验证脚本
+### 管道流程
 
-| 脚本 | 说明 |
-|------|------|
-| `validate_test_drive_model.py` | 试驾模型验证 |
-| `validate_ohab_model.py` | HAB 模型验证 |
-| `validate_arrive_model.py` | 到店模型验证 |
-| `validate_ensemble.py` | 集成模型验证 |
+```
+01_merge.py → 02_profile.py → 03_clean.py → 04_desensitize.py → 05_split.py
+```
+
+| 步骤 | 功能 | 输出 |
+|------|------|------|
+| merge | 合并 Excel + DMP | merged.parquet |
+| profile | 数据探查诊断 | profile.md |
+| clean | 数据清洗 | cleaned.parquet |
+| desensitize | 数据脱敏 | desensitized.parquet |
+| split | 数据拆分 | train.parquet, test.parquet |
+
+### 统一数据拆分（推荐）
+
+```bash
+uv run python scripts/pipeline/06_split_unified.py \
+    --input ./data/线索宽表_合并_补充试驾.parquet \
+    --output ./data/unified_split \
+    --time-column 线索创建时间 \
+    --cutoff 2026-03-01
+```
+
+**输出**：
+- `train.parquet` / `test.parquet` → 试驾预测
+- `train_driven.parquet` / `test_driven.parquet` → 下订预测
 
 ---
 
 ## 预测脚本
 
-### predict.py - 模型预测
-
-对输入数据进行预测，将预测结果追加到 DataFrame 中返回。与验证脚本不同，predict.py 不要求目标标签存在，专注于纯推理。
-
-**支持三种预测模式**：
-
-| 模式 | 描述 | 输入模型 | 业务规则匹配 |
-|------|------|---------|-------------|
-| `simple` | 简单模式 | 单模型（14天试驾概率） | 部分匹配 |
-| `medium` | 中等模式 | 试驾三模型集成（7/14/21天概率） | 完整匹配试驾前阶段 |
-| `advanced` | 高等模式 | 试驾+下订双阶段模型 | 完整匹配全部业务规则 |
-
-**业务规则**：
-- **试驾前邀约阶段**：H 级（7天内试驾）、A 级（14天内试驾）、B 级（21天内试驾）
-- **试驾后下订商谈阶段**：H 级（7天内下订）、A 级（14天内下订）、B 级（21天内下订）
-- **O 级**：已成交（优先级最高，自动检测）
-
 ```bash
-# ========== 简单模式（默认）==========
-# 使用单模型（14天试驾概率）推断 OHAB
+# 简单模式：单模型
 uv run python scripts/predict.py \
     --mode simple \
     --model-path ./outputs/models/test_drive_model \
-    --data-path ./data/final_v4_test.parquet \
+    --data-path ./data/test.parquet \
     --output ./predictions.csv
 
-# ========== 中等模式 ==========
-# 使用试驾三模型集成（7/14/21天概率）推断 OHAB
+# 中等模式：三模型集成（推荐）
 uv run python scripts/predict.py \
     --mode medium \
     --ensemble-path ./outputs/models/test_drive_ensemble \
-    --data-path ./data/final_v4_test.parquet \
-    --output ./predictions.csv
+    --data-path ./data/test.parquet \
+    --output ./predictions.csv \
+    --include-ohab
 
-# ========== 高等模式 ==========
-# 双阶段预测：已试驾用下订模型，未试驾用试驾模型
+# 高等模式：双阶段预测
 uv run python scripts/predict.py \
     --mode advanced \
     --drive-ensemble-path ./outputs/models/test_drive_ensemble \
     --order-ensemble-path ./outputs/models/order_after_drive_ensemble \
-    --data-path ./data/final_v4_test.parquet \
-    --output ./predictions.csv
-
-# 包含原始数据列
-uv run python scripts/predict.py \
-    --mode medium \
-    --ensemble-path ./outputs/models/test_drive_ensemble \
-    --data-path ./data/final_v4_test.parquet \
-    --output ./predictions_full.csv \
-    --include-original
+    --data-path ./data/test.parquet \
+    --output ./predictions.csv \
+    --include-ohab
 ```
-
-**参数说明**：
 
 | 参数 | 说明 | 默认值 |
 |------|------|--------|
 | `--mode` | 预测模式（simple/medium/advanced） | simple |
-| `--model-path` | 单模型路径（simple 模式必需） | - |
-| `--ensemble-path` | 试驾集成模型目录（medium 模式必需） | - |
-| `--drive-ensemble-path` | 试驾集成模型目录（advanced 模式必需） | - |
-| `--order-ensemble-path` | 下订集成模型目录（advanced 模式必需） | - |
-| `--data-path` | 数据文件路径（必需） | - |
-| `--output` | 输出文件路径 | 不保存 |
-| `--include-original` | 包含原始数据列 | False |
-| `--threshold-h/a/b` | H/A/B 级判定阈值 | 0.5 |
-| `--id-column` | ID 列名 | 线索唯一ID |
-
-**O 级检测字段**（优先级最高，任一条件满足即标记为 O 级）：
-
-| 字段 | 检测条件 |
-|------|----------|
-| `下订时间` | 不为空 |
-| `成交标签` | = 1 |
-| `is_final_ordered` | = 1 |
-| `下定状态` | 包含"已下定"/"已成交"等关键词 |
-| `订单状态` | 包含"已下定"/"已成交"等关键词 |
-| `意向金支付状态` | 包含"已支付"/"已付"等关键词 |
-| `成交日期` | 不为空 |
-| `结算日期` | 不为空 |
-| `订单号`/`customer_order_no` | 不为空 |
-
-**已试驾检测字段**：
-
-| 字段 | 检测条件 |
-|------|----------|
-| `试驾时间` | 不为空 |
-| `试驾状态` | 包含"已试驾"/"试驾完成"等关键词 |
-
-**输出格式**：
-
-| 列名 | 说明 |
-|------|------|
-| `线索唯一ID` | 线索标识 |
-| `OHAB评级` | O/H/A/B/N |
-| `评级阶段` | O / 试驾前 / 试驾后 |
-| `试驾概率_7天/14天/21天` | 各时间窗口试驾概率 |
-| `下订概率_7天/14天/21天` | 各时间窗口下订概率（仅 advanced） |
+| `--include-ohab` | 包含 OHAB 评级 | false |
+| `--include-original` | 包含原始数据列 | false |
 
 ---
 
-## 其他脚本
+## 工具脚本
 
 ### diagnose_data.py - 数据诊断
-
-检查列映射、数据格式、特征分布。
 
 ```bash
 uv run python scripts/diagnose_data.py ./data/202603.parquet
@@ -457,99 +146,16 @@ uv run python scripts/diagnose_data.py ./data/202603.parquet
 
 ### monitor.py - 后台任务监控
 
-查看后台任务状态、日志，停止任务。
-
 ```bash
-uv run python scripts/monitor.py status
-uv run python scripts/monitor.py log train_ohab -f
-uv run python scripts/monitor.py stop --all
+uv run python scripts/tools/monitor.py status
+uv run python scripts/tools/monitor.py log train_ohab -f
+uv run python scripts/tools/monitor.py stop --all
 ```
 
-### monitor_progress.py - 训练进度监控
-
-实时分析训练日志，输出友好的进度信息。
+### generate_topk.py - Top-K 名单
 
 ```bash
-# 实时监控最新训练日志
-uv run python scripts/monitor_progress.py
-
-# 持续监控（类似 tail -f）
-uv run python scripts/monitor_progress.py --follow
-```
-
-### generate_local_plots.py - 本地图表生成
-
-读取服务器同步回来的 CSV/JSON 产出物，在本地环境生成带中文字体的图表。
-
-```bash
-# 生成 OHAB 模型验证图表
-uv run python scripts/generate_local_plots.py --input-dir ./outputs/validation/ohab_validation
-
-# 指定输出目录
-uv run python scripts/generate_local_plots.py --input-dir ./outputs/validation/ohab_validation --output-dir ./outputs/plots/ohab
-```
-
-### generate_business_report.py - 业务报告生成
-
-生成客户版评级报告。
-
-```bash
-uv run python scripts/generate_business_report.py \
-    --model-dir ./outputs/models/ohab_model \
-    --validation-dir ./outputs/validation \
-    --output-path ./outputs/reports/hab_poc_report.md
-```
-
-### generate_topk.py - Top-K 名单生成
-
-生成 Top-K 高意向线索名单。
-
-```bash
-uv run python scripts/generate_topk.py \
+uv run python scripts/tools/generate_topk.py \
     --model-path ./outputs/models/arrive_model \
     --k 100 500
 ```
-
----
-
-## 脚本关系图
-
-```
-数据管道（推荐）
-┌─────────────────────────────────────────────────────────────┐
-│  run_pipeline.py                                             │
-│  ├── 01_merge.py      ← excel_to_parquet.py / excel_to_csv.py│
-│  ├── 02_profile.py                                          │
-│  ├── 03_clean.py                                            │
-│  ├── 04_desensitize.py                                      │
-│  └── 05_split.py                                            │
-└─────────────────────────────────────────────────────────────┘
-                    ↓
-┌─────────────────────────────────────────────────────────────┐
-│  训练入口                                                    │
-│  run.py → train_model.py → train_*.py                       │
-└─────────────────────────────────────────────────────────────┘
-                    ↓
-┌─────────────────────────────────────────────────────────────┐
-│  验证入口                                                    │
-│  run.py → validate_model.py → validate_*.py                 │
-└─────────────────────────────────────────────────────────────┘
-                    ↓
-┌─────────────────────────────────────────────────────────────┐
-│  预测入口                                                    │
-│  predict.py（纯推理，无需标签）                               │
-└─────────────────────────────────────────────────────────────┘
-```
-
----
-
-## 维护日志
-
-| 日期 | 新增脚本 | 说明 |
-|------|----------|------|
-| 2026-04-03 | 文档更新 | 补充遗漏脚本文档，删除临时脚本 |
-| 2026-04-03 | 删除脚本 | 移除 `03_clean_duckdb.py`（重复功能） |
-| 2026-03-31 | `predict.py` | 模型预测脚本（纯推理，无需标签） |
-| 2026-03-31 | `excel_to_csv.py` | Excel→CSV 快速转换 |
-| 2026-03-31 | `excel_to_parquet.py` | Excel→Parquet 流式处理 |
-| 2026-03-31 | `merge_parquet.py` | Parquet 合并（DuckDB） |
