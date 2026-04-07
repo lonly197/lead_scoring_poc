@@ -39,6 +39,40 @@
 3.  **自动 OOT 门槛**：自动 OOT 的最小跨度默认是 `90` 天，而不是旧版的 `14` 天。
 4.  **防泄漏闭环**：切分元数据都会保存在 `feature_metadata.json` 中，`validate_model.py` 会自动识别并实施物理隔离。
 
+5.  **标签泄漏验证**：所有训练脚本已集成兄弟标签排除验证，详见下节。
+
+---
+
+## 标签泄漏验证
+
+所有训练脚本在数据准备阶段自动验证：
+
+```python
+# 训练脚本中的验证逻辑（train_test_drive_ensemble.py 等）
+leaks = validate_no_label_leakage(list(train_df.columns), target_label)
+if leaks:
+    raise ValueError(f"检测到泄漏标签: {leaks}")
+logger.info("泄漏检查通过: 数据中不存在兄弟标签")
+```
+
+### 验证命令
+
+```bash
+# 确认日志中有泄漏检查通过记录
+grep "泄漏检查通过" outputs/logs/*.log
+
+# 检查特征重要性，确保无兄弟标签残留
+head -20 outputs/models/test_drive_ensemble/试驾标签_7天/feature_importance.csv
+```
+
+### 性能对比
+
+| 指标 | 修复前（泄漏） | 修复后（预期） |
+|------|---------------|---------------|
+| ROC-AUC | ~99.96% | ~80-90% |
+| 训练日志 | 无警告 | 显示"泄漏检查通过" |
+| 特征重要性 | 标签列排前列 | 无标签列 |
+
 ---
 
 ## 命令行参数调用示例

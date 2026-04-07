@@ -57,7 +57,44 @@ OUTPUT_DIR=./outputs
 自动排除的字段：
 - **ID 类**：线索唯一ID、客户ID、手机号_脱敏 等
 - **目标泄漏**：到店时间、试驾时间、订单状态 等
-- **其他目标变量**：到店标签_7天、试驾标签_14天 等
+- **兄弟标签**：同组内其他时间窗口标签（自动排除）
+
+---
+
+## 标签分组系统
+
+训练某个时间窗口模型时，同组内其他时间窗口标签必须排除，否则模型可学到数学包含关系导致性能虚高（ROC-AUC 99.96%）。
+
+### 分组定义
+
+| 标签组 | 包含标签 | 用途 |
+|--------|----------|------|
+| `test_drive_label_group` | 试驾标签_7天/14天/21天/30天 | 试驾预测 |
+| `arrive_label_group` | 到店标签_7天/14天/30天 | 到店预测 |
+| `order_label_group` | 下订标签_7天/14天/21天 | 下订预测 |
+| `ohab_label_group` | label_OHAB, 线索评级结果 | OHAB评级 |
+
+### 辅助函数
+
+| 函数 | 用途 | 返回值 |
+|------|------|--------|
+| `get_label_group(target_label)` | 获取所属标签组 | List[str] |
+| `get_sibling_labels(target_label)` | 获取同组内其他标签 | List[str] |
+| `get_excluded_columns(target_label)` | 获取完整排除列表（含兄弟标签） | List[str] |
+| `validate_no_label_leakage(columns, target_label)` | 验证无泄漏 | List[str]（泄漏列表） |
+
+### 示例
+
+```python
+from config.config import get_sibling_labels, get_excluded_columns
+
+# 训练 7 天试驾模型时，需排除 14/21 天标签
+siblings = get_sibling_labels("试驾标签_7天")
+# 返回: ["试驾标签_14天", "试驾标签_21天", "试驾标签_30天"]
+
+excluded = get_excluded_columns("试驾标签_7天")
+# 返回: id_columns + leakage_columns + sibling_labels
+```
 
 ---
 
