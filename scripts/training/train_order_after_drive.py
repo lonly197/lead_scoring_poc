@@ -42,7 +42,7 @@ from datetime import datetime
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
-from config.config import config, get_excluded_columns
+from config.config import config, get_excluded_columns, get_sibling_labels, validate_no_label_leakage
 from src.data.loader import DataLoader, FeatureEngineer, split_data
 from src.evaluation.metrics import ModelReport, TopKEvaluator
 from src.models.predictor import LeadScoringPredictor
@@ -66,8 +66,8 @@ TASK_NAME = "train_order_after_drive"
 # 时间窗口定义（对应 H/A/B 业务规则）
 TIME_WINDOWS = ["7天", "14天", "21天"]
 
-# 目标变量列名（训练时保留，不能删除）
-# 试驾后下订阶段的标签
+# 目标变量列名（仅作文档参考，实际标签分组由 config.feature.order_label_group 管理）
+# 训练时必须只保留当前目标变量，排除其他时间窗口标签，否则会造成数据泄漏
 TARGET_COLUMNS = [
     "下订标签_7天", "下订标签_14天", "下订标签_21天",
     "试驾后下订天数差",
@@ -76,29 +76,33 @@ TARGET_COLUMNS = [
 
 def remove_leakage_columns(df, target_label: str = None):
     """
-    删除泄漏字段（保留目标变量）
+    删除泄漏字段（只保留当前目标变量）
+
+    重要：训练某个时间窗口模型时，必须排除其他时间窗口的标签列，
+    否则模型可以直接学到标签间的数学包含关系，导致性能虚高。
 
     Args:
         df: 数据框
-        target_label: 当前训练的目标变量（如果指定则保留）
+        target_label: 当前训练的目标变量（必须指定）
 
     Returns:
         清理后的数据框
     """
-    # 获取所有泄漏字段
+    if target_label is None:
+        raise ValueError("target_label 不能为空，必须指定当前训练的目标变量")
+
+    # 获取所有泄漏字段和ID字段
     leakage_cols = config.feature.leakage_columns
     id_cols = config.feature.id_columns
 
-    # 合并要删除的列
-    cols_to_remove = leakage_cols + id_cols
+    # 获取同组内的兄弟标签（必须删除，防止数据泄漏）
+    sibling_labels = get_sibling_labels(target_label)
 
-    # 保留目标变量
-    for target in TARGET_COLUMNS:
-        if target in cols_to_remove:
-            cols_to_remove.remove(target)
+    # 合并要删除的列（去重）
+    cols_to_remove = list(set(leakage_cols + id_cols + sibling_labels))
 
-    # 如果指定了特定目标变量，确保保留
-    if target_label and target_label in cols_to_remove:
+    # 确保目标变量不被删除
+    if target_label in cols_to_remove:
         cols_to_remove.remove(target_label)
 
     # 只删除数据中实际存在的列
@@ -110,8 +114,12 @@ def remove_leakage_columns(df, target_label: str = None):
             logger.info(f"  - {c}")
         if len(existing_cols) > 10:
             logger.info(f"  ... 及其他 {len(existing_cols) - 10} 个字段")
-
         df = df.drop(columns=existing_cols)
+
+    # 验证：检查是否还有兄弟标签残留
+    leaks = validate_no_label_leakage(list(df.columns), target_label)
+    if leaks:
+        raise ValueError(f"检测到数据泄漏！训练数据中存在兄弟标签: {leaks}")
 
     return df
 
@@ -265,6 +273,12 @@ def train_single_model(
     logger.info(f"  开始训练: {target_label}")
     logger.info(f"  模型目录: {model_dir}")
 
+    # 验证：训练数据中不应存在其他时间窗口标签（防止数据泄漏）
+    leaks = validate_no_label_leakage(list(train_df.columns), target_label)
+    if leaks:
+        raise ValueError(f"训练数据中存在泄漏标签: {leaks}")
+    logger.info(f"  泄漏检查通过: 数据中不存在兄弟标签")
+
     excluded_columns = get_excluded_columns(target_label)
 
     excluded_model_types = None
@@ -365,6 +379,10 @@ def train_single_model_spawn(
 
     train_df = pd.read_parquet(train_path)
     test_df = pd.read_parquet(test_path)
+
+    # 移除泄漏字段和兄弟标签（防止数据泄漏）
+    train_df = remove_leakage_columns(train_df, target_label)
+    test_df = remove_leakage_columns(test_df, target_label)
 
     class ArgsWrapper:
         def __init__(self, d):
@@ -558,6 +576,9 @@ def main():
             df_train = train_loader.load()
             df_test = test_loader.load()
 
+            # 注意：此处不删除泄漏字段，因为需要保留多个时间窗口标签供后续各模型使用
+            # 每个模型的训练数据会在训练时单独处理（移除兄弟标签）
+            logger.info("跳过全局泄漏字段删除，将在各模型训练时单独处理")
             logger.info(f"训练集列数: {len(df_train.columns)}, 测试集列数: {len(df_test.columns)}")
 
             logger.info("步骤 2/4: 特征工程")
@@ -590,8 +611,9 @@ def main():
             loader = DataLoader(data_path, auto_adapt=True)
             df = loader.load()
 
-            logger.info("删除泄漏字段...")
-            df = remove_leakage_columns(df)
+            # 注意：此处不删除泄漏字段，因为需要保留多个时间窗口标签供后续拆分
+            # 每个模型的训练数据会在 train_single_model 中单独处理
+            logger.info("跳过全局泄漏字段删除，将在各模型训练时单独处理")
 
             quality = check_data_quality(df)
             logger.info(f"数据: {quality['total_rows']} 行, {quality['total_columns']} 列")
@@ -658,10 +680,16 @@ def main():
             logger.info("顺序训练模式")
             for window in args.time_windows:
                 target_label = f"下订标签_{window}"
+
+                # 为当前模型准备数据：移除泄漏字段和其他时间窗口标签
+                logger.info(f"为 {target_label} 准备训练数据...")
+                train_df_current = remove_leakage_columns(train_df.copy(), target_label)
+                test_df_current = remove_leakage_columns(test_df.copy(), target_label)
+
                 result = train_single_model(
                     target_label=target_label,
-                    train_df=train_df,
-                    test_df=test_df,
+                    train_df=train_df_current,
+                    test_df=test_df_current,
                     output_dir=output_dir,
                     args=args,
                 )

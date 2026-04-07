@@ -429,6 +429,34 @@ class FeatureConfig:
         ]
     )
 
+    # ============================================================
+    # 标签分组定义（用于防止多标签泄漏）
+    # 训练某个时间窗口模型时，必须排除同组内其他时间窗口的标签
+    # ============================================================
+    test_drive_label_group: List[str] = field(
+        default_factory=lambda: [
+            "试驾标签_7天", "试驾标签_14天", "试驾标签_21天", "试驾标签_30天",
+        ]
+    )
+
+    arrive_label_group: List[str] = field(
+        default_factory=lambda: [
+            "到店标签_7天", "到店标签_14天", "到店标签_30天",
+        ]
+    )
+
+    order_label_group: List[str] = field(
+        default_factory=lambda: [
+            "下订标签_7天", "下订标签_14天", "下订标签_21天",
+        ]
+    )
+
+    ohab_label_group: List[str] = field(
+        default_factory=lambda: [
+            "label_OHAB", "线索评级结果",
+        ]
+    )
+
 
 @dataclass
 class OutputConfig:
@@ -476,6 +504,44 @@ class Config:
 config = Config.from_env()
 
 
+def get_label_group(target_label: str) -> List[str]:
+    """
+    获取目标变量所属的标签组
+
+    Args:
+        target_label: 目标变量名
+
+    Returns:
+        同一标签组内的所有标签名列表
+    """
+    groups = [
+        config.feature.test_drive_label_group,
+        config.feature.arrive_label_group,
+        config.feature.order_label_group,
+        config.feature.ohab_label_group,
+    ]
+    for group in groups:
+        if target_label in group:
+            return group
+    return [target_label]  # 未分组则返回自身
+
+
+def get_sibling_labels(target_label: str) -> List[str]:
+    """
+    获取同一标签组内的其他标签（兄弟标签）
+
+    训练时需要排除这些标签，防止数据泄漏。
+
+    Args:
+        target_label: 目标变量名
+
+    Returns:
+        同组内的其他标签名列表（不包含自身）
+    """
+    group = get_label_group(target_label)
+    return [label for label in group if label != target_label]
+
+
 def get_excluded_columns(target_label: str) -> List[str]:
     """
     获取需要排除的列名列表
@@ -484,15 +550,37 @@ def get_excluded_columns(target_label: str) -> List[str]:
         target_label: 目标变量名称
 
     Returns:
-        需要排除的列名列表
+        需要排除的列名列表（包含泄漏字段、ID字段、兄弟标签）
     """
     excluded = config.feature.id_columns + config.feature.leakage_columns
+
+    # 添加同组内的兄弟标签（防止多标签泄漏）
+    sibling_labels = get_sibling_labels(target_label)
+    for label in sibling_labels:
+        if label not in excluded:
+            excluded.append(label)
 
     # 确保目标变量本身不被排除
     if target_label in excluded:
         excluded.remove(target_label)
 
     return excluded
+
+
+def validate_no_label_leakage(df_columns: List[str], target_label: str) -> List[str]:
+    """
+    验证数据中不存在其他时间窗口的标签（防止泄漏）
+
+    Args:
+        df_columns: 数据框的列名列表
+        target_label: 当前训练的目标变量
+
+    Returns:
+        发现的泄漏标签列表（为空表示通过验证）
+    """
+    sibling_labels = get_sibling_labels(target_label)
+    found_leaks = [label for label in sibling_labels if label in df_columns]
+    return found_leaks
 
 
 def get_feature_columns(target_label: str, all_columns: List[str]) -> List[str]:
