@@ -331,7 +331,7 @@ def load_train_ohab_script(
     monkeypatch.setitem(sys.modules, "scripts.generate_topk", topk_module)
 
     module_name = "scripts.train_ohab"
-    script_path = Path(__file__).resolve().parents[1] / "scripts" / "train_ohab.py"
+    script_path = Path(__file__).resolve().parents[1] / "scripts" / "training" / "train_ohab.py"
     sys.modules.pop(module_name, None)
     spec = importlib.util.spec_from_file_location(module_name, script_path)
     module = importlib.util.module_from_spec(spec)

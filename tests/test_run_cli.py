@@ -131,7 +131,7 @@ def test_run_background_disables_console_logging(monkeypatch, tmp_path):
 
     monkeypatch.setattr(run_script.subprocess, "Popen", fake_popen)
     pid = run_script.run_background(
-        script_path=str(Path("scripts/train_ohab.py")),
+        script_path=str(Path("scripts/training/train_ohab.py")),
         args=["--preset", "good_quality"],
         log_dir=str(tmp_path),
     )
