@@ -55,7 +55,7 @@ def load_arrive_validate_script(monkeypatch):
     monkeypatch.setitem(sys.modules, "src.utils.helpers", helpers_module)
 
     module_name = "scripts.validate_arrive_model"
-    script_path = Path(__file__).resolve().parents[1] / "scripts" / "validate_arrive_model.py"
+    script_path = Path(__file__).resolve().parents[1] / "scripts" / "validation" / "validate_arrive_model.py"
 
     sys.modules.pop(module_name, None)
     spec = importlib.util.spec_from_file_location(module_name, script_path)

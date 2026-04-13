@@ -1,6 +1,11 @@
 import logging
 import warnings
 
+import pytest
+
+# visualization.py needs real matplotlib; skip if not available
+pytest.importorskip("matplotlib")
+
 import pandas as pd
 
 import src.utils.visualization as visualization

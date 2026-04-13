@@ -1,3 +1,4 @@
+import importlib.util
 import sys
 from pathlib import Path
 
@@ -5,7 +6,17 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from scripts import generate_topk
+
+def _load_generate_topk():
+    script_path = Path(__file__).resolve().parents[1] / "scripts" / "tools" / "generate_topk.py"
+    spec = importlib.util.spec_from_file_location("scripts.generate_topk", script_path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["scripts.generate_topk"] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+generate_topk = _load_generate_topk()
 
 
 class MulticlassPredictor:

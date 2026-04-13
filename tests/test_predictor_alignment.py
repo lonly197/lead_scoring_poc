@@ -122,7 +122,7 @@ class FakeTabularPredictor:
         self.last_evaluate_columns = list(data.columns)
         return {"accuracy": 1.0}
 
-    def feature_importance(self, data):
+    def feature_importance(self, data, **kwargs):
         self.last_feature_importance_columns = list(data.columns)
         if FakeTabularPredictor.feature_importance_return is not None:
             return FakeTabularPredictor.feature_importance_return

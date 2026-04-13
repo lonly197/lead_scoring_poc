@@ -18,15 +18,15 @@ def test_run_py_passes_test_size_for_test_drive(monkeypatch):
     monkeypatch.setattr(
         sys,
         "argv",
-        ["run.py", "train_test_drive", "--test-size", "0.3"],
+        ["run.py", "train", "test_drive", "--test-size", "0.3"],
     )
 
-    with pytest.raises(SystemExit) as exc_info:
-        run_script.main()
+    result = run_script.main()
 
-    assert exc_info.value.code == 0
-    assert captured["script_path"].endswith("train_test_drive.py")
-    assert captured["args"] == ["--test-size", "0.3"]
+    assert result == 0
+    assert captured["script_path"].endswith("train_model.py")
+    assert captured["args"] == ["test_drive", "--test-size", "0.3", "--max-workers", "3"]
+
 
 def test_run_py_passes_ohab_specific_args(monkeypatch):
     captured = {}
@@ -42,7 +42,8 @@ def test_run_py_passes_ohab_specific_args(monkeypatch):
         "argv",
         [
             "run.py",
-            "train_ohab",
+            "train",
+            "ohab",
             "--label-mode",
             "hab",
             "--enable-model-comparison",
@@ -53,12 +54,12 @@ def test_run_py_passes_ohab_specific_args(monkeypatch):
         ],
     )
 
-    with pytest.raises(SystemExit) as exc_info:
-        run_script.main()
+    result = run_script.main()
 
-    assert exc_info.value.code == 0
-    assert captured["script_path"].endswith("train_ohab.py")
+    assert result == 0
+    assert captured["script_path"].endswith("train_model.py")
     assert captured["args"] == [
+        "ohab",
         "--label-mode",
         "hab",
         "--enable-model-comparison",
@@ -66,6 +67,8 @@ def test_run_py_passes_ohab_specific_args(monkeypatch):
         "gbm",
         "--train-end",
         "2026-03-15",
+        "--max-workers",
+        "3",
     ]
 
 
@@ -83,7 +86,8 @@ def test_run_py_passes_ohab_resource_profile_args(monkeypatch):
         "argv",
         [
             "run.py",
-            "train_ohab",
+            "train",
+            "ohab",
             "--training-profile",
             "server_16g_compare",
             "--memory-limit-gb",
@@ -97,12 +101,12 @@ def test_run_py_passes_ohab_resource_profile_args(monkeypatch):
         ],
     )
 
-    with pytest.raises(SystemExit) as exc_info:
-        run_script.main()
+    result = run_script.main()
 
-    assert exc_info.value.code == 0
-    assert captured["script_path"].endswith("train_ohab.py")
+    assert result == 0
+    assert captured["script_path"].endswith("train_model.py")
     assert captured["args"] == [
+        "ohab",
         "--training-profile",
         "server_16g_compare",
         "--memory-limit-gb",
@@ -113,6 +117,8 @@ def test_run_py_passes_ohab_resource_profile_args(monkeypatch):
         "RF,XT,KNN",
         "--num-folds-parallel",
         "1",
+        "--max-workers",
+        "3",
     ]
 
 

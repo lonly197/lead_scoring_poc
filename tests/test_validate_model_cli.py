@@ -14,7 +14,7 @@ def load_validate_entry(monkeypatch):
     monkeypatch.setitem(sys.modules, "src.utils.helpers", helpers_module)
 
     module_name = "scripts.validate_model"
-    script_path = Path(__file__).resolve().parents[1] / "scripts" / "validate_model.py"
+    script_path = Path(__file__).resolve().parents[1] / "scripts" / "validation" / "validate_model.py"
 
     sys.modules.pop(module_name, None)
     spec = importlib.util.spec_from_file_location(module_name, script_path)
@@ -149,7 +149,7 @@ def test_resolve_validator_script_uses_explicit_model_type(monkeypatch):
         Namespace(model_type="arrive", model_path="outputs/models/arrive_model")
     )
 
-    assert script_path.endswith("scripts/validate_arrive_model.py")
+    assert script_path.endswith("scripts/validation/validate_arrive_model.py")
 
 
 def test_resolve_validator_script_uses_test_drive_model_type(monkeypatch):
@@ -159,7 +159,7 @@ def test_resolve_validator_script_uses_test_drive_model_type(monkeypatch):
         Namespace(model_type="test_drive", model_path="outputs/models/test_drive_model")
     )
 
-    assert script_path.endswith("scripts/validate_test_drive_model.py")
+    assert script_path.endswith("scripts/validation/validate_test_drive_model.py")
 
 
 def test_validate_ohab_parse_args_uses_ohab_validation_subdir(monkeypatch):
@@ -244,7 +244,7 @@ def test_validate_ohab_parse_args_uses_ohab_validation_subdir(monkeypatch):
     metrics_module.check_hab_monotonicity = lambda *args, **kwargs: None
 
     module_name = "scripts.validate_ohab_model"
-    script_path = Path(__file__).resolve().parents[1] / "scripts" / "validate_ohab_model.py"
+    script_path = Path(__file__).resolve().parents[1] / "scripts" / "validation" / "validate_ohab_model.py"
     sys.modules.pop(module_name, None)
     spec = importlib.util.spec_from_file_location(module_name, script_path)
     module = importlib.util.module_from_spec(spec)

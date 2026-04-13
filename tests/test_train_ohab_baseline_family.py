@@ -1,3 +1,14 @@
+"""Tests for _candidate_prefixes_for_family from train_ohab.py.
+
+This function is pure logic (no autogluon/matplotlib dependencies),
+but train_ohab.py imports heavy modules at the module level, so we
+skip when those dependencies are unavailable.
+"""
+import pytest
+
+pytest.importorskip("autogluon.tabular")
+pytest.importorskip("matplotlib")
+
 import sys
 import types
 
@@ -12,21 +23,7 @@ sklearn_module.metrics = metrics_module
 sys.modules.setdefault("sklearn", sklearn_module)
 sys.modules.setdefault("sklearn.metrics", metrics_module)
 
-matplotlib_module = types.ModuleType("matplotlib")
-pyplot_module = types.ModuleType("matplotlib.pyplot")
-pyplot_module.figure = lambda *args, **kwargs: None
-pyplot_module.savefig = lambda *args, **kwargs: None
-pyplot_module.close = lambda *args, **kwargs: None
-pyplot_module.rcParams = {}
-font_manager_module = types.ModuleType("matplotlib.font_manager")
-font_manager_module.fontManager = types.SimpleNamespace(ttflist=[])
-matplotlib_module.pyplot = pyplot_module
-matplotlib_module.font_manager = font_manager_module
-sys.modules.setdefault("matplotlib", matplotlib_module)
-sys.modules.setdefault("matplotlib.pyplot", pyplot_module)
-sys.modules.setdefault("matplotlib.font_manager", font_manager_module)
-
-from scripts.train_ohab import _candidate_prefixes_for_family
+from scripts.training.train_ohab import _candidate_prefixes_for_family
 
 
 def test_candidate_prefixes_accepts_gbdt_alias():

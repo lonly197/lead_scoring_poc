@@ -55,7 +55,7 @@ def load_test_drive_validate_script(monkeypatch):
     monkeypatch.setitem(sys.modules, "src.utils.helpers", helpers_module)
 
     module_name = "scripts.validate_test_drive_model"
-    script_path = Path(__file__).resolve().parents[1] / "scripts" / "validate_test_drive_model.py"
+    script_path = Path(__file__).resolve().parents[1] / "scripts" / "validation" / "validate_test_drive_model.py"
 
     sys.modules.pop(module_name, None)
     spec = importlib.util.spec_from_file_location(module_name, script_path)

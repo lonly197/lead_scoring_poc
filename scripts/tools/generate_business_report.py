@@ -233,7 +233,7 @@ def generate_single_report(
             "该模型是 AutoML 在内部概率损失口径下的最优结果，用于技术参考。"
         )
     report_lines.append(
-        "- 客户版主模型采用业务推荐模型，因为它更适合当前"高意向优先触达 + 分层运营"的落地目标。"
+        "- 客户版主模型采用业务推荐模型，因为它更适合当前'高意向优先触达 + 分层运营'的落地目标。"
     )
     if balanced_accuracy is not None or macro_f1 is not None:
         report_lines.append(

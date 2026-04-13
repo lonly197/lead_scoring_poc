@@ -1,10 +1,24 @@
 import json
+import importlib.util
+import sys
 from argparse import Namespace
+from pathlib import Path
 
 import pandas as pd
 
-from scripts import generate_business_report
 from src.evaluation.business_logic import build_lead_action_record, get_sop_for_label
+
+
+def _load_generate_business_report():
+    script_path = Path(__file__).resolve().parents[1] / "scripts" / "tools" / "generate_business_report.py"
+    spec = importlib.util.spec_from_file_location("scripts.generate_business_report", script_path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["scripts.generate_business_report"] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+generate_business_report = _load_generate_business_report()
 
 
 def test_build_lead_action_record_returns_sop_and_reasons():
@@ -124,7 +138,7 @@ def test_generate_business_report_reads_structured_outputs(tmp_path, monkeypatch
         lambda: Namespace(model_dir=str(model_dir), validation_dir=str(validation_dir), output_path=str(output_path)),
     )
 
-    generate_business_report.generate_report()
+    generate_business_report.generate_single_report(model_dir, validation_dir, output_path)
 
     content = output_path.read_text(encoding="utf-8")
     assert "HAB 线索评级 POC 业务报告" in content
