@@ -130,7 +130,11 @@ def prepare_data_for_prediction(
         target: 目标变量
         interaction_context: 特征工程上下文
         excluded_columns: 排除列
-        keep_label_columns: 是否保留标签列（若训练时存在标签泄漏，预测时需保留以匹配特征）
+        keep_label_columns: 是否保留标签列（保留 ground truth 标签用于后续业务评估，
+                           如 compute_hab_bucket_summary。注意：训练时这些列已被
+                           excluded_columns 排除，模型不会将它们作为特征。实际推理时
+                           predictor.predict_proba() 会通过 _prepare_inference_data()
+                           再次对齐特征列，所以此处的过滤是防御性编程）
 
     Returns:
         处理后的数据
@@ -145,8 +149,9 @@ def prepare_data_for_prediction(
     df_processed, _ = feature_engineer.transform(df, interaction_context=interaction_context)
 
     # 删除排除列
-    # 注意：如果训练时模型将标签列作为特征学习（标签泄漏），
-    # 预测时必须保留相同的列结构，否则会导致特征不匹配而预测失败
+    # 注意：此处的 cols_to_drop 是防御性编程。实际推理时 predictor.predict_proba()
+    # 会通过 _prepare_inference_data() → _align_frame_to_features() 严格按训练期
+    # 特征列对齐，多余的列会被再次丢弃。此处过滤主要减少传入 predictor 的数据体积。
     if keep_label_columns:
         label_columns = [col for col in df_processed.columns if any(marker in col for marker in LABEL_COLUMN_MARKERS)]
         cols_to_drop = [col for col in excluded_columns if col in df_processed.columns and col not in label_columns]

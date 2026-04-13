@@ -35,7 +35,12 @@ def clean_raw_schema(
     high_missing_threshold: float = 0.95,
     indicator_missing_threshold: float = 0.70,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
-    """原始字段级清洗，仅处理明显无效的原始列。"""
+    """原始字段级清洗，仅处理明显无效的原始列。
+
+    注意：high_missing_threshold 默认 0.95（95%），比 03_clean.py 的 50% 更宽松。
+    这是设计意图不同：screening 阶段只删除极端高缺失列，避免过度清洗；
+    而 03_clean.py 是独立的管道清洗脚本，采用更激进的阈值。
+    """
     cleaned_df = df.copy()
     dropped_high_missing: list[str] = []
     dropped_weak_semantic: list[str] = []

@@ -28,6 +28,11 @@ project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
 from src.pipeline.utils import load_data, save_data, print_step
+from config.config import config
+
+
+# 保护列：ID 和时间关键字段，不可被清洗删除
+_PROTECTED_COLUMNS: set[str] = {"线索唯一ID", "线索创建时间"}
 
 
 class DataCleaner:
@@ -136,13 +141,14 @@ class DataCleaner:
         return df
 
     def _drop_high_missing(self, df: "pl.DataFrame") -> "pl.DataFrame":
-        """删除高缺失列"""
+        """删除高缺失列（保护关键字段不被误删）"""
         import polars as pl
 
         missing_ratio = df.null_count() / len(df)
         high_missing_cols = [
             col for col in df.columns
-            if missing_ratio.select(col).item() > self.high_missing_threshold
+            if col not in _PROTECTED_COLUMNS
+            and missing_ratio.select(col).item() > self.high_missing_threshold
         ]
 
         if high_missing_cols:
@@ -155,11 +161,13 @@ class DataCleaner:
         return df
 
     def _drop_constant_columns(self, df: "pl.DataFrame") -> "pl.DataFrame":
-        """删除常量列"""
+        """删除常量列（保护关键字段不被误删）"""
         import polars as pl
 
         constant_cols = []
         for col in df.columns:
+            if col in _PROTECTED_COLUMNS:
+                continue
             unique_count = df.select(pl.col(col).n_unique()).item()
             if unique_count <= 1:
                 constant_cols.append(col)
@@ -389,6 +397,22 @@ class DataCleaner:
         print(f"清洗报告已保存: {output_path}")
 
 
+def _check_leakage_residual(df: "pl.DataFrame", cleaner: DataCleaner) -> None:
+    """检查清洗后的数据是否残留已知泄漏列，如有则告警。"""
+    from config.config import config
+
+    residual = [col for col in config.feature.leakage_columns if col in df.columns]
+    if residual:
+        print_step(
+            "泄漏列残留警告",
+            "warn",
+            f"以下 {len(residual)} 个泄漏字段仍存在于清洗后数据中: {', '.join(residual[:5])}..."
+        )
+        cleaner.clean_log["leakage_residual"] = residual
+    else:
+        print_step("泄漏列检查", "success", "所有已知泄漏列均已从数据中排除")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="数据清洗脚本 - 基础清洗 + 高级清洗",
@@ -576,6 +600,9 @@ def main() -> int:
             handle_skewed=args.handle_skewed,
         )
         print_step("执行清洗", "success")
+
+        # 检查泄漏列残留
+        _check_leakage_residual(df_cleaned, cleaner)
 
         # 保存结果
         print_step("保存结果", "running", str(output_path))
